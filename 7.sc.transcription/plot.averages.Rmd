@@ -1,0 +1,193 @@
+---
+title: "Plot average gene expressions"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+```
+
+# Produce data
+```{r}
+# # libraries
+# library(tidyverse)
+# library(Seurat)
+# library(SeuratDisk)
+# 
+# setwd("/Users/simonas/Documents/Projects/archive/skin_bacteria_GWAS")
+# 
+# # read data
+# skin <- readRDS("data/GSE130973_seurat_analysis_lyko.rds")
+# skin <- UpdateSeuratObject(skin)
+# 
+# # candidate genes
+# cgenes <- read_tsv("data/gene.annotation.tsv")
+# 
+# # gene expression
+# exprs <- FetchData(object = skin, vars = c(cgenes$gene.name, 'FAM105A', 'C12orf55', 'C3orf83', 'integrated_snn_res.0.4'))
+# 
+# # reannotate cell types
+# exprs <- exprs %>% mutate(broadcell = case_when(
+#   integrated_snn_res.0.4 %in% c("0", "13", "16") ~ 'Macrophages/DC',
+#   integrated_snn_res.0.4 %in% c("1") ~ 'Fibroblasts - pro-inflammatory',
+#   integrated_snn_res.0.4 %in% c("2") ~ 'Fibroblasts - secretory-reticular',
+#   integrated_snn_res.0.4 %in% c("3") ~ 'Fibroblasts - secretory-papillary',
+#   integrated_snn_res.0.4 %in% c("4") ~ 'Vascular EC',
+#   integrated_snn_res.0.4 %in% c("5") ~'Keratinocytes - differentiated',
+#   integrated_snn_res.0.4 %in% c("6") ~ 'T cells',
+#   integrated_snn_res.0.4 %in% c("7", "15") ~ 'Keratinocytes - undifferentiated',
+#   integrated_snn_res.0.4 %in% c("8", "10") ~ 'Pericytes',
+#   integrated_snn_res.0.4 %in% c("9") ~ 'Fibroblasts - mesenchymal',
+#   integrated_snn_res.0.4 %in% c("11") ~   'Erythrocytes',
+#   integrated_snn_res.0.4 %in% c("12") ~ 'Lymphatic EC',
+#   integrated_snn_res.0.4 %in% c("14") ~   'Melanocytes'
+# ))
+# 
+# # average expression of genes in groups
+# gene_exprs_tb <- exprs %>% select(-integrated_snn_res.0.4) %>% 
+#   gather(gene_name, log_exprs, -broadcell) %>% 
+#   mutate(gene_name = case_when(
+#     gene_name %in% "C12orf55" ~ "CFAP54",
+#     gene_name %in% "FAM105A" ~ "OTULINL",
+#     gene_name %in% "C3orf83" ~ "MKRN2OS",
+#     TRUE ~ gene_name
+#     )) %>% 
+#   group_by(broadcell, gene_name) %>%
+#   summarise(avg_log_exprs=mean(log_exprs)) %>% ungroup()
+# 
+# 
+# # percentage of cells expressing gene
+# gene_pct_tb <- exprs %>% select(-integrated_snn_res.0.4) %>% 
+#   gather(gene_name, log_exprs, -broadcell) %>% 
+#   mutate(gene_name = case_when(
+#     gene_name %in% "C12orf55" ~ "CFAP54",
+#     gene_name %in% "FAM105A" ~ "OTULINL",
+#     gene_name %in% "C3orf83" ~ "MKRN2OS",
+#     TRUE ~ gene_name
+#   )) %>% 
+#   group_by(broadcell, gene_name) %>%
+#   summarise(total = n(), expressed = sum(ifelse(log_exprs > 0, 1,0))) %>%
+#   ungroup() %>% mutate(percent_cells = expressed/total*100L) %>% 
+#   mutate(percent_cells = ifelse(percent_cells==0, NA, percent_cells))
+# 
+# # add gene meta information
+# gene_exprs <- left_join(gene_exprs_tb, gene_pct_tb, by=c("broadcell", "gene_name"))
+# write_tsv(gene_exprs, "data/gene_exprs_update.tsv")
+```
+
+
+
+## Import data
+```{r}
+gene_exprs <- "/home/lsilva/IKMB/projects/skin.mgwas/common.data/sc.skin.expression.sole.boldo/analysed/gene_exprs_update.tsv" %>% 
+  read_tsv()
+```
+
+```{r}
+gene_exprs <- gene_exprs %>% 
+  #format broadcell names
+  mutate(broadcell = case_when(broadcell == "Keratinocytes - undifferentiated" ~ "Keratinocytes (undiff. projenitor)",
+                               broadcell == "Keratinocytes - differentiated" ~ "Keratinocytes (differentiated)",
+                               broadcell == "Fibroblasts - secretory-reticular" ~ "Fibroblasts (secr.-reticular)",
+                               broadcell == "Fibroblasts - secretory-papillary" ~ "Fibroblasts (secr.-papillary)",
+                               broadcell == "Fibroblasts - mesenchymal" ~ "Fibroblasts (mesenchymal)",
+                               broadcell == "Fibroblasts - pro-inflammatory" ~ "Fibroblasts (pro-inflammatory)",
+                               TRUE ~ broadcell)) %>% 
+  mutate(broadcell = factor(broadcell, levels = c(
+    "Fibroblasts (mesenchymal)",
+    "Fibroblasts (pro-inflammatory)",
+    "Fibroblasts (secr.-papillary)",
+    "Fibroblasts (secr.-reticular)",
+    "Keratinocytes (differentiated)",
+    "Keratinocytes (undiff. projenitor)",
+    "Pericytes",
+    "Melanocytes",
+    "Macrophages/DC",
+    "Lymphatic EC",
+    "T cells",
+    "Vascular EC",
+    "Erythrocytes"
+  )))
+
+  ggplot(gene_exprs, aes(gene_name, broadcell)) +
+  geom_point(aes(fill = avg_log_exprs, size = percent_cells), shape=21, color="black") +
+  scale_fill_distiller(
+    palette = 'Reds',
+    direction = 1,
+    name = 'normalised\nexpression',
+    guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")
+  ) +
+  labs(y = 'cell type', color = 'expression', x='candidate gene') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90, vjust = 0.5, hjust = 1))
+```
+# Save data to plot
+```{r}
+saveRDS(gene_exprs, paste0(d.out, "/", "gene_exprs.to.plot.rds"))
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

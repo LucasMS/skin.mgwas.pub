@@ -1,0 +1,125 @@
+---
+title: "Make figure"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+library(ggthemes)
+theme_set(theme_few(base_size = 17))
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(ggrepel)
+library(patchwork)
+library(ggtext)
+```
+
+## Import data
+```{r}
+mr <- read_tsv("/home/lsilva/IKMB/projects/skin.mgwas/results/9.MR/mr.annotated.filtered.tsv") 
+```
+
+# Edit text
+
+```{r}
+mr <- mr %>% 
+   mutate(label = if_else(str_sub(name, 1, 1) %in% c("s", "g", "f"),
+                             str_replace(name, "\\.", "\\.\\*"),
+                         name),
+         label = if_else(
+           str_detect(label, "\\["),
+           str_replace(label, "\\[", "\\ [\\*"),
+           label),
+         label = case_when(str_detect(label, "(unc.)") ~ 
+                             str_replace(label, " \\(unc", "\\* \\(unc"),
+                           str_detect(label, "\\]") ~ str_replace(label, "\\]", "\\*\\]"),
+                           str_sub(label, 1, 1) %in% c ("a", "s", "g",  "f") ~ paste0(label, "*"),
+         TRUE ~ label))
+```
+
+
+
+#MR plot
+
+
+```{r, fig.height = 6, fig.width = 10}
+mr.plot <- mr %>% 
+  mutate(outcome = gsub("Allergy/hypersensitivity/anaphylaxis",
+                        "Allergy/hypersens./anaphylaxis",
+                        outcome)) %>% 
+  ggplot(aes(x = fct_reorder(label, Genus.name), y=b, color = outcome)) +
+  geom_point(aes(shape = microenv), size = 2) +
+  ggpubr::rotate_x_text() +
+  coord_flip()+
+  geom_errorbar(aes(ymin=b-se, ymax=b+se), width=.1, alpha = 0.8) +
+  geom_hline(yintercept=0, 
+             color = "grey", size=0.5) +
+  scale_colour_colorblind() +
+  labs(y = "Effect size",
+       x = "Exposure (Mic. feature)", 
+       color = "Outcome",
+       shape = "Microenv.") +
+  theme(axis.text.y = element_markdown())
+mr.plot
+```
+
+
+```{r}
+sessionInfo()
+```

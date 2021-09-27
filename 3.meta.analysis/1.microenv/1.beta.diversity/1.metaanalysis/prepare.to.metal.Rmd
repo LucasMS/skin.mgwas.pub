@@ -1,0 +1,159 @@
+---
+title: "Organize results to metal"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(qqman)
+```
+
+## Add functions to estimate labda
+
+```{r}
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/estlamb.R")
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/estlambda/estlambda.R")
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/get.lambda.filtered.R")
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/get.lambda.R")
+```
+
+## Import data
+```{r}
+dir.results <- "/work_ifs/sukmb447/projects/skin.mgwas/results/2.statistical.tests/1.beta.diversity/results/"
+tests <- "/work_ifs/sukmb447/projects/skin.mgwas/results/2.statistical.tests/1.beta.diversity/tests.rds" %>% 
+  readRDS()
+files <- list.files(dir.results)
+```
+
+
+```{r}
+lambda <- NULL
+
+for (i in unique(tests$index)){
+  print(paste("index:", i))
+  # Make dataframe to gather results from a given site
+  df <- NULL
+  tests.site <- tests %>% filter(index == i)
+  for (k in 1:nrow(tests.site)){
+    df.in <- paste0("test", tests.site[k,"test.id"], ".",
+                    "index", tests.site[k,"index"], ".",
+                    "chr", tests.site[k,"chromossome"], ".",
+                    "betatests.rds") %>% 
+      paste(dir.results, ., sep = "/") %>% 
+      readRDS() %>% 
+      mutate(effect = "+")
+    
+    # add to the overall data
+    
+    df <- rbind(df, df.in)
+  }
+  paste0("index", i, ".comb.betatests.txt") %>% 
+    paste0(d.out, "/", .) %>% 
+    write.table(df, ., sep = " ", quote = F, col.names = T, row.names = F)
+  
+  #get genomic inflation
+  #Method 1:
+  l1 <- get.lambda(df$P)
+  l2 <- get.lambda.filtered(df, "chr", "position", "P")
+  lambda.i <- cbind(l1,l2)
+  lambda <- rbind(lambda, lambda.i)
+  
+  # Plot Manhattan
+  
+  paste0("index", i, ".comb.betatests.man.jpeg") %>% 
+    paste0(d.out, "/", .) %>%
+    jpeg(width = 720, height = 480)
+  tryCatch({manhattan(df, chr = "chr", bp = "position",snp = "snp.name", p = "P")},
+           error = function(e) {NULL})
+  dev.off()
+  
+  # Plot qq P
+  
+  paste0("index", i, ".comb.betatests.qq.jpeg") %>% 
+    paste0(d.out, "/", .) %>%
+    jpeg(width = 720, height = 480)
+  tryCatch({qq(df$P)},
+           error = function(e) {NULL})
+  dev.off()
+}
+
+# Write genomic inflation estimation
+write.table(lambda, paste0(d.out, "/", "genomic.inflations.txt"), quote = F, sep = "\t", row.names = F, col.names = T)
+
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

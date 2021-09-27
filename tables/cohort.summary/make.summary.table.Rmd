@@ -1,0 +1,145 @@
+---
+title: "Make cohort summary tables"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(phyloseq)
+library(qwraps2)
+library(scales)
+```
+
+## Import data
+```{r}
+df <- "~/IKMB/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rds" %>% 
+  readRDS() %>% 
+  sample_data() %>% 
+  data.frame() %>% 
+  tibble() %>% 
+  group_by(Cohort)
+```
+
+
+
+# Make table
+
+## Participant data
+```{r, results="asis"}
+df_participants <- df %>% 
+  select(Participant_ID, Age, Sex, BMI, Cohort) %>% 
+  distinct()
+
+summary_participants <- list(
+  "Host traits" = list("Age (years)" = ~ qwraps2::median_iqr(Age, digits = 0),
+                       "Sex:female" = ~ n_perc0(Sex == "female"),
+                       "BMI" = ~ qwraps2::median_iqr(BMI, digits = 0)))
+
+
+participants <- summary_table(df_participants, 
+                              summary_participants)
+
+print(participants, markup = "markdown")
+#participants
+```
+### P-values
+
+```{r, results='asis'}
+Age <- wilcox.test(Age ~ Cohort, df_participants)$p.value %>% 
+  frmtp(markup = "markdown")
+
+Sex <- fisher.test(table(df_participants$Sex, df_participants$Cohort))$p.value %>%
+  frmtp(markup = "markdown")
+
+BMI <- wilcox.test(BMI ~ Cohort, df_participants)$p.value %>%
+  frmtp(markup = "markdown")
+
+ps <- c(Age, Sex, BMI)
+ps
+```
+
+
+
+## Sample sites
+
+```{r, results="asis"}
+summary_sites <- list(
+  "Dry" = list("Dorsal forearm" = ~ n_perc0(Site == "Dorsal forearm"),
+               "Volar forearm" = ~ n_perc0(Site == "Volar forearm")),
+  "Moist" = list("Antecubital fossa" = ~ n_perc0(Site == "Antecubital fossa")),
+  "Sebaceous" = list("Forehead" = ~ n_perc0(Site == "Forehead"),
+                     "Retroauricular fold" = ~ n_perc0(Site == "Retroauricular fold")))
+
+
+sites <- summary_table(df, 
+                       summary_sites)
+
+print(sites, markup = "markdown")
+#sites
+```
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

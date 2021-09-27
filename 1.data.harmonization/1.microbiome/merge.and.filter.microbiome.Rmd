@@ -1,0 +1,409 @@
+---
+title: "Merge and filter microbiome data from popgen and kora"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+Filter is done by abundance and prevalence based by Site and cohort data
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#   scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(phyloseq)
+library(metagMisc) # filtering options
+```
+
+## Import data
+```{r}
+d.in <- d.out
+ps.popgen <- paste0(d.in, "/","phyloseq.popgen.rds") %>% 
+  readRDS()
+ps.kora <-  paste0(d.in, "/","phyloseq.kora.rds") %>% 
+  readRDS()
+microenv <- "~/IKMB/projects/skin.mgwas/common.data/microenv.tsv" %>% 
+  read.delim(stringsAsFactors = F)
+```
+
+
+# Functions
+
+## Function to plot  prevalence abundance
+
+```{r}
+plot.phylum = function(ps, name){
+  prevdf = apply(X = otu_table(ps),
+                 MARGIN = ifelse(taxa_are_rows(ps), yes = 1, no = 2),
+                 FUN = function(x){sum(x > 0)})
+  prevdf1 = data.frame(Prevalence = prevdf,
+                       TotalAbundance = taxa_sums(ps),
+                       tax_table(ps)@.Data)
+  p <- ggplot(prevdf1, aes((TotalAbundance/sum(otu_table(ps)@.Data))*100,
+                           (Prevalence / nsamples(ps))*100,color=Phylum)) +
+    # Include a guess for parameter
+    geom_hline(yintercept = 10, alpha = 0.5, linetype = 2) +
+    geom_vline(xintercept = 0.1, alpha = 0.5, linetype = 2) +
+    geom_point(size = 2, alpha = 0.7) +
+    scale_x_log10() +  xlab("Abundance (%)") + ylab("Prevalence (% samples)") +
+    facet_wrap(~Phylum) + theme(legend.position="none") + labs(title = name)
+  
+  return(p)
+}
+```
+
+## Function to select ASVs 
+Selection is performed based on the intersection of prevalence and abundance cut-offs calculated on total rarefied ASV tables.
+
+```{r}
+select.asv <- function(cut.off.core, pc.cutoff, micro.st){
+  
+  micro.1 <- micro.st
+  
+  #Set cutoff core
+  min.participants <- nrow(micro.1) * cut.off.core
+  print(min.participants)
+  # Get ASVs that pass the core cutoff
+  core <- micro.1 > 0
+  core <- core %>% colSums()
+  core <- core[core > min.participants]
+  core <- names(core)
+  # Set cutoff abundance
+  abun <- colSums(micro.1)
+  total.seqs <- sum(abun)
+  min.abun <- (pc.cutoff * total.seqs) / 100
+  print(min.abun)
+  # Get ASVs that pass abundance cutoff
+  abun <- colSums(micro.1)
+  abun <- abun[abun > min.abun]
+  abun <- names(abun)
+  # Combine the results
+  asv.to.keep.1 <- base::intersect(core, abun) %>% unique()
+  
+  d <- data.frame(ASV = asv.to.keep.1, stringsAsFactors = F) 
+  return(d)
+}
+```
+
+
+# Combine data from the cohorts
+
+## Set name of cohorts
+```{r}
+sample_data(ps.popgen)$Cohort = "PopGen"
+sample_data(ps.kora)$Cohort = "KORA FF4"
+```
+
+## Merge 
+
+## Change names of taxa to sequence 
+
+Before merging, let's converge taxa (ASV1, ASV2...) names to sequences, since this is use by merge to sum abundances
+
+
+```{r}
+identical(tax_table(ps.popgen)@.Data %>% data.frame() %>% pull(seqs) %>% names(), taxa_names(ps.popgen))
+
+taxa_names(ps.popgen) <- tax_table(ps.popgen)@.Data %>%
+  data.frame() %>% 
+  pull(seqs)
+
+taxa_names(ps.popgen) %>% head()
+#
+taxa_names(ps.kora) <- tax_table(ps.kora)@.Data %>%
+  data.frame() %>% 
+  pull(seqs)
+
+
+# It performs full join, which means that any OTU that is specific of a single cohort are eliminated Lets
+ps <- merge_phyloseq(ps.kora, ps.popgen)
+
+#Because ASV names are now possibly repeated, let's rename them, and use them as taxa names
+
+
+nr <- ps@tax_table@.Data %>%
+  data.frame %>%
+  nrow()
+
+tax_table(ps)@.Data[, "ASV"] <- paste0("ASV",
+                                       str_pad(string = 1:nr,
+                                               width = nr %>%
+                                                 as.character() %>%
+                                                 str_length(),
+                                               side = "left",
+                                               pad = "0"))
+# Can we use them as taxa names
+tax_table(ps)@.Data[, "ASV"] %>% duplicated() %>% sum() == 0
+
+taxa_names(ps) <- tax_table(ps)@.Data[, "ASV"]
+```
+
+### merge_phyloseq does it a full join.
+```{r}
+k <- tax_table(ps.kora)@.Data %>% data.frame() %>% select(seqs) %>% mutate(kora = 1)
+p <- tax_table(ps.popgen)@.Data %>% data.frame() %>% select(seqs) %>% mutate(popgen = 1)
+identical(full_join(k, p, by = "seqs") %>% nrow(), ps@tax_table@.Data %>% data.frame %>% nrow())
+rm(k,p)
+```
+
+# Add index of Site and Cohort
+
+Indexes will be based on the combination of Site and Cohort. This will facilitate loops and subsisting the data later on.
+
+```{r}
+sample_data(ps)$index <- sample_data(ps) %>% 
+  data.frame() %>%
+  mutate(index = paste(Site, Cohort) %>% 
+           as.factor() %>% 
+           as.numeric() %>% 
+           as.character()) %>%
+  pull(index)
+```
+
+# Add microenvironment
+
+```{r}
+sample_data(ps)$microenv <- sample_data(ps) %>% 
+  data.frame() %>%
+  left_join(microenv, by = "Site") %>% 
+  pull(Microenvironment)
+```
+
+
+# Filter based on abundance and prevalence by Site and Cohort
+
+## Set cut-offs
+```{r}
+#Prevalence
+cut.off.core <- 0.10 #proportion
+# Abundance
+pc.cutoff <- 0.1 #percentage
+```
+
+## Rarefy data
+
+Need to normalize the data for filtering
+
+```{r}
+ps.rare <- ps %>% rarefy_even_depth(sample.size = 10000, replace = F, trimOTUs = T) 
+```
+
+## Filter
+
+```{r, fig.width = 14, fig.height = 14}
+ps.sites <- list()
+
+indexes <- sample_data(ps) %>% pull(index) %>% unique() %>% sort()
+
+for (i in indexes){
+  # Get subset of ps and ps.rare (used to calculate the asvs to keep)
+  ps.temp <- ps %>% subset_samples(index == i) %>%
+    prune_taxa(taxa_sums(.) > 0, .)
+  
+  ps.rare.temp <- ps.rare %>% subset_samples(index == i) %>%
+    prune_taxa(taxa_sums(.) > 0, .)
+  # Plot 
+  title <- ps.temp %>% 
+    sample_data() %>%
+    data.frame() %>% 
+    select(Site, Cohort) %>%
+    unique %>% 
+    mutate(name = paste(Site, Cohort)) %>% 
+    pull (name)
+  plot.phylum(ps.temp, paste("Before:", title)) %>% print()
+  
+  # Select ASVs to keep based on rarefied
+  asvs <- select.asv(cut.off.core, 
+                     pc.cutoff, 
+                     otu_table(ps.rare.temp)@.Data %>% data.frame)
+  
+  ps.temp <- ps.temp %>% subset_taxa(ASV %in% asvs$ASV)
+  
+  #visualize filtering
+  plot.phylum(ps.temp, paste("After:", title)) %>% print()
+  
+  # add data to the list
+  ps.sites[[i]] <- ps.temp
+  rm(ps.temp, title, asvs, ps.rare.temp)
+}
+```
+
+## Merge all sites
+
+```{r}
+first <- indexes[1]
+indexes.no.first <- indexes[-1]
+
+ps.filtered <- ps.sites[[first]]
+for (i in indexes.no.first){
+  ps.filtered <- merge_phyloseq(ps.filtered, ps.sites[[i]])
+}
+print("Bofore filtering:")
+ps
+print("After filtering:")
+ps.filtered
+
+```
+
+## Remove samples on post filtering
+Filter samples which remained with less than 5K sequences
+
+```{r}
+ps.filtered <- ps.filtered %>% 
+  prune_samples(sample_sums(.) > 5000,.) %>% 
+  prune_taxa(taxa_sums(.) > 0, .)
+
+
+plot.phylum(ps.filtered, "Filtered") %>% print()
+```
+
+## Update ASV names
+
+```{r}
+#Because ASV names are now possibly repeated, let's rename them, and use them as taxa names
+
+
+nr <- ps.filtered@tax_table@.Data %>%
+  data.frame %>%
+  nrow()
+
+tax_table(ps.filtered)@.Data[, "ASV"] <- paste0("ASV",
+                                                str_pad(string = 1:nr,
+                                                        width = nr %>%
+                                                          as.character() %>%
+                                                          str_length(),
+                                                        side = "left",
+                                                        pad = "0"))
+# Can we use them as taxa names
+tax_table(ps.filtered)@.Data[, "ASV"] %>% duplicated() %>% sum() == 0
+
+taxa_names(ps.filtered) <- tax_table(ps.filtered)@.Data[, "ASV"]
+
+```
+
+# Make list of participants
+
+## Per site
+
+```{r}
+dir.participants <- paste0(d.out, "/participant.list")
+dir.create(dir.participants , showWarnings = F)
+
+for (i in indexes){
+  df <- ps.filtered %>%
+    subset_samples(index == i) %>%
+    sample_data() %>%
+    data.frame() %>% 
+    select(Genotype_ID, Site, Cohort, index)
+  name <- df %>%
+    select(Site, Cohort, index) %>% 
+    unique() %>% 
+    mutate(name = paste(index, abbreviate(Site), abbreviate(Cohort), sep = ".") %>% 
+             str_to_lower() %>% 
+             str_replace(" ", ".")) %>% 
+    pull(name)
+  write.table(df$Genotype_ID %>% unique(), paste0(dir.participants, "/", name, ".txt"), quote = F,sep = "\t", row.names = F, col.names = F) 
+  
+}
+```
+# Make list of participants per cohort
+```{r}
+for (i in ps.filtered %>% 
+     sample_data() %>%
+     pull(Cohort) %>% 
+     unique()){
+  df <- ps.filtered %>%
+    subset_samples(Cohort == i) %>%
+    sample_data() %>%
+    data.frame() %>% 
+    select(Genotype_ID, Cohort)
+  name <- df %>%
+    select(Cohort) %>% 
+    unique() %>% 
+    mutate(name = Cohort %>% 
+             str_to_lower() %>% 
+             str_replace(" ", "")) %>% 
+    pull(name)
+  write.table(df$Genotype_ID %>% unique(), paste0(dir.participants, "/", name, ".txt"), quote = F,sep = "\t", row.names = F, col.names = F) 
+  
+}
+
+```
+
+
+# Save new data
+
+```{r}
+saveRDS(ps.filtered, paste0(d.out, "/", "phyloseq.rds"))
+```
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,139 @@
+---
+title: "Filter microbiome data to match the samples with available genotype"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+   scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(phyloseq)
+```
+
+## Import data
+```{r}
+ps <- readRDS("~/IKMB/projects/skin.mgwas/results/1.data.harmonization/1.microbiome/phyloseq.rds")
+
+gen.samples <- "~/IKMB/projects/skin.mgwas/results/1.data.harmonization/2.genotype/PopGen_and_KORA.harmonized.chr1.nosex" %>% 
+  read.delim(sep = "\t", header = F, stringsAsFactors = F) %>% 
+  column_to_rownames("V1") %>% 
+  magrittr::set_colnames(c("Genotype_ID"))
+```
+
+# Get samples in the microbiome
+
+```{r}
+ps.samples <- ps %>% sample_data() %>% 
+  data.frame() %>% 
+  select(Genotype_ID) %>% 
+  unique()
+```
+
+# Get samples in both data
+```{r}
+samples <- intersect(gen.samples, ps.samples)
+```
+
+# Filter microbiome
+```{r}
+ps
+ps.filtered <- ps %>% subset_samples(Genotype_ID %in% samples$Genotype_ID)
+ps
+```
+
+# Stats
+
+```{r}
+filtered.out <- anti_join(ps %>% sample_data() %>% data.frame(),
+          ps.filtered %>% sample_data() %>% data.frame()) %>% 
+  select(Cohort, Participant_ID) %>% 
+  unique()
+
+filtered.out %>% length()
+
+filtered.out
+```
+
+# Write output
+
+```{r}
+saveRDS(ps.filtered, paste0(d.out, "/", "phyloseq.rds"))
+#save rarefied
+saveRDS(ps.filtered %>% rarefy_even_depth(5000), paste0(d.out, "/", "phyloseq.rarefied.rds"))
+```
+
+
+
+# Conclusion
+
+# Session information
+
+```{r}
+sessionInfo()
+```

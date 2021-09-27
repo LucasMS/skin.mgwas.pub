@@ -1,0 +1,160 @@
+---
+title: "Get MR table"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(kableExtra)
+library(scales)
+```
+
+## Import data
+```{r}
+df <- "/home/lsilva/IKMB/projects/skin.mgwas/results/9.MR/mr.annotated.tsv" %>% 
+  read_tsv() %>% 
+  filter(method == "Inverse variance weighted")
+```
+
+
+
+```{r}
+# Edit scientific names
+df <- df %>% 
+  mutate(label = if_else(str_sub(name, 1, 1) %in% c("s", "g", "f"),
+                             str_replace(name, "\\.", "\\.\\*"),
+                         name),
+         label = if_else(
+           str_detect(label, "\\["),
+           str_replace(label, "\\[", "\\ [\\*"),
+           label),
+         label = case_when(str_detect(label, "(unc.)") ~ 
+                             str_replace(label, " \\(unc", "\\* \\(unc"),
+                           str_detect(label, "\\]") ~ str_replace(label, "\\]", "\\*\\]"),
+                           str_sub(label, 1, 1) %in% c ("a", "s", "g",  "f") ~ paste0(label, "*"),
+         TRUE ~ label)) %>% 
+  mutate(name = label)
+
+
+df <- df %>% 
+  mutate(`Microenv.` = microenv,
+         `Beta ± s.e.` = paste0(b %>% scientific() %>%
+                                  gsub("e-", "x10^-",.) %>%
+                                  paste0(., "^"), 
+                                "±", 
+                                se %>% scientific() %>%
+                                  gsub("e-", "x10^-",.) %>%
+                                  paste0(., "^")),
+         `*P* value` =pval %>%  scientific() %>%
+           gsub("e-", "x10^-",.) %>%
+           gsub("e+", "x10^",.) %>%
+           paste0(., "^"),
+         `*q<sub>(trait)</sub>* value` =  padj %>%  scientific() %>%
+           gsub("e-", "x10^-",.) %>%
+           gsub("e+", "x10^",.) %>%
+           paste0(., "^"),
+         `*q<sub>(global)</sub>* value` = global.padj %>%  scientific() %>%
+           gsub("e-", "x10^-",.) %>%
+           gsub("e+", "x10^",.) %>%
+           paste0(., "^")) %>% 
+  arrange(padj) %>% 
+  mutate(ID = 1:nrow(.)) %>% 
+  rename(Outcome = outcome,
+         `Exposure (feature)` = name,
+         `No. of SNPs` = nsnp,
+         `F<sub>(mean)</sub>` = `F`,
+         `F<sub>(min.)</sub>` = `F_min`,
+         `Features in cluster` = cluster.member)
+```
+
+# Output table
+```{r}
+
+df %>%
+  select(Outcome, 
+         `Exposure (feature)`,
+         Microenv., 
+         `No. of SNPs`, 
+         `F<sub>(mean)</sub>`,
+         `F<sub>(min.)</sub>`,
+         `Beta ± s.e.`, 
+         `*P* value`,
+         `*q<sub>(trait)</sub>* value`,
+         `*q<sub>(global)</sub>* value`, 
+         `Features in cluster`) %>% 
+  kable(escape = F) %>% 
+  kable_styling()
+```
+
+Single variant association tests were performed for each sample type and each microbial feature. Tests were adjusted for age, sex, BMI and genetic background (first ten genetic principal components). Positions are give as in genome assembly hg19 (GRCh37). Effect allele frequency (EAF) and total sample number (N) in for the meta-analysis (sample pairs for dry) are shown. Candidate loci from dry data sets were considered significant when at least one data set resulted in genome-wide (P < 5 x 10^-8^; lowest P-value shown) significance and the other in nominal significance (P < 0.05). Results from moist and sebaceous skin sites were combined by meta-analysis and considered significant when P value were genome-wide significant and data sets were nominal significant. Meta-analysis were weighted by sample size for multivariate microbial feature and by inverse variance for univariate features. Effect size (Beta) and its standard error (s.e.) from tests with volar forearm are shown for dry skin. Beta from meta-analysis is shown for moist and sebaceous. Tests were two-sided. Candidate causal variants were identified by fine-mapping or based on LD > 0.6 to the lead SNP. Genes with variants within their region (no formatted font) or with variants associated with their expression (italic font) are shown. Genes are shown in bold font when both conditions are met.
+
+# Write table
+```{r}
+write_tsv(df, paste0(d.out, "/", "raw.table.tsv"))
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

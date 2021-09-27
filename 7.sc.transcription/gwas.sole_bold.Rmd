@@ -1,0 +1,159 @@
+---
+title: "Check expression of GWAS genes in Sole-Boldo"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+# 
+# # Set seed for reproducibility
+# set.seed(13)
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#   scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggrepel)
+library(pheatmap)
+library(readxl)
+library(viridis) # color
+```
+
+## Import data
+```{r}
+d.in <- "/home/lsilva/IKMB/projects/skin.mgwas/common.data/sc.skin.expression.sole.boldo/"
+files.path <- list.files(d.in, pattern = "*.xlsx")
+
+files <- c()
+for (i in 1:length(files.path)){
+  name <- files.path[i] %>% 
+    gsub(".xlsx", "",.)
+  files[i] <- paste0(d.in, files.path[i])
+  names(files)[i] <- name
+}
+
+# genes
+genes <- "/home/lsilva/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/gene.annotation.tsv" %>% 
+  read.delim() %>% 
+  mutate(gwas = "yes") %>% 
+  rename("gene" = "gene.name")
+
+cluster.annotation <- "/home/lsilva/IKMB/projects/skin.mgwas/common.data/sc.skin.expression.sole.boldo/cluster.annotation.txt" %>% 
+  read.delim()
+```
+
+
+# Process clusters
+
+## read data and plot data
+```{r}
+res <- list()
+for (i in 1:length(files)){
+  
+  res.in <- files[i] %>% 
+    read_xlsx(skip = 2) %>% 
+    mutate(file = names(files)[i]) %>% 
+    rename("gene" = "gene") %>% 
+    mutate(cluster = cluster %>% as.character()) %>% 
+    filter(p_val_adj < 0.05) %>% 
+    select(cluster, gene, file, avg_logFC)
+  
+  res[[names(files)[i]]] <- res.in
+}
+```
+
+# Annoate genes based on clusters
+
+## Visualize
+```{r}
+res.df <- bind_rows(res) %>% 
+  right_join(genes, by = "gene") %>% 
+  filter(!is.na(cluster)) %>% 
+  left_join(cluster.annotation, by = c("cluster", "file")) 
+```
+
+# Plot
+
+```{r}
+to.plot <- res.df %>%
+  filter(file == "supplementary.data.1") %>% 
+  select(gene, avg_logFC, annotation, cluster) %>%
+  mutate(annotation = paste0(annotation, " [", cluster, "]")) %>%
+  select(-cluster) %>% 
+  spread(key = gene, value = avg_logFC) %>% 
+  column_to_rownames("annotation")
+
+to.plot[is.na(to.plot)] <- 0
+
+pheatmap(to.plot, na_col = "grey", legend = T, legend_labels = "asds", color = cividis(10))
+```
+
+# Write annotation
+
+```{r}
+paste0(d.out, "/", "gene.clusters.annotation.rds") %>% 
+  saveRDS(res.df, .)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,2 @@
+DIROUT="/home/lsilva/IKMB/projects/skin.mgwas/results/6.cohort.description"
+DIRIN="." 

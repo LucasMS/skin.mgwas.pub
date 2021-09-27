@@ -1,0 +1,370 @@
+---
+title: "Analtsis of MR reulst with uk biobank"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14)) 
+
+# Set seed for reproducibility
+set.seed(13)
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(phyloseq)
+library(readxl)
+library(Hmisc)
+```
+
+#Function
+```{r}
+lseq <- function(from=1, to=100000, length.out=6) {
+  # logarithmic spaced sequence
+  # origin from library("emdbook"), because need only this
+  exp(seq(log(from), log(to), length.out = length.out))
+}
+```
+
+## Import data
+```{r}
+#Contains information about which taxa/features were tested in which meta.data run (meta.data.id)
+meta.indices <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/3.meta.analysis/1.microenv/2.taxonomic.features/metasoft/1.metaanalysis/prepare/meta.indices.rds")
+
+# Contains information about taxonomy. Useful for annotation of ASVs
+ps <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rds")
+
+# Contains cluster information of the features, which features are clustered together
+tests <-  readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/2.statistical.tests/2.taxonomic.features/tests.rds")
+
+mr <- read.delim("/home/lsilva/IKMB/projects/skin.mgwas/common.data/MR.results/MR_results_ukb.2021.06.10.tsv") %>% 
+  mutate(meta.id = exposure)
+
+```
+# Filter and format MR results
+
+## Remove enventual duplicated results
+
+```{r}
+mr <- mr %>% 
+  unique()
+```
+
+## Only work with specific, non-cancer outcomes
+MR results were done in a greedy approach. This means that a lot of outcomes were tested that we did not want to test. So, I will filter them out and not even consider their output.
+## To exclude
+```{r}
+unique(mr$outcome)
+
+to.exclude <- mr %>% 
+  filter(str_detect(outcome, "Type of cancer") | 
+           str_detect(outcome, "unspecified") | 
+           str_detect(outcome, "Other malignant neoplasms") | 
+           str_detect(outcome, "Ease of skin tanning") |
+           str_detect(outcome, "Benign lipomatous neoplasm") |
+           str_detect(outcome, "Scar conditions") |
+           str_detect(outcome, "anaphylactic reaction to drug") |
+           str_detect(outcome, "cyst") |
+           str_detect(outcome, "trunk") |
+           str_detect(outcome, "Cellulitis") |
+           str_detect(outcome, "Candidiasis")
+  )  %>% 
+  pull(outcome) %>% 
+  unique()
+to.exclude
+```
+
+### cleaned
+
+```{r}
+mr <- mr %>% 
+  filter(!outcome %in% to.exclude)
+```
+
+## Format names and outcomes
+
+```{r}
+mr <- mr %>% 
+  mutate(outcome = gsub(" \\|.*", "", outcome)) %>% 
+  mutate(outcome = gsub("Non-cancer illness code  self-reported", "Non-cancer illness code, self-reported", outcome))
+
+mr <- mr %>%   
+  separate(outcome, into = c("type.outcome", "new.outcome"), sep = "\\: ", remove = F) %>% 
+  #fill in NAs
+  mutate(new.outcome = if_else(is.na(new.outcome),
+                               outcome,
+                               new.outcome)) %>% 
+  mutate(outcome = new.outcome) %>% 
+  select(-new.outcome) %>% 
+  #extract disease ID when present
+  mutate(id.CD10 = str_extract(outcome, "[A-Z][0-9]*\\.?[0-9]+"),
+         outcome = gsub("[A-Z][0-9]*\\.?[0-9]+ ", "", outcome) %>% 
+           str_to_sentence())
+```
+
+
+## Remove eventual double testing due to F_min
+
+This was because snps were removed if they yelded very low F and estimation were performed again.
+
+### Edit outcomes
+
+```{r}
+
+mr <- mr %>% 
+  mutate(id = paste(exposure, outcome, method, id.outcome)) %>% 
+  arrange(desc(F_min))
+dup <-  mr %>% 
+  pull(id) %>% 
+  duplicated()
+
+mr <- mr %>% 
+  filter(!dup)
+```
+
+## Remove eventual double testing due to same entry in the ukbank
+
+There are two, ukb-a and ukb-b. I will prioritize ukb-b, because is the newest version
+
+```{r}
+mr <- mr %>% 
+  mutate(id = paste(exposure, outcome, method)) %>% 
+  arrange(desc(id.outcome))
+dup <-  mr %>% 
+  pull(id) %>% 
+  duplicated()
+
+mr <- mr %>% 
+  filter(!dup)
+
+mr <- mr %>% 
+  select(-id)
+```
+
+
+## Check unique
+
+```{r}
+identical(mr %>% 
+            select(outcome, method, exposure) %>%
+            unique() %>%
+            nrow(),
+          nrow(mr))
+```
+
+
+# Annnotate the exposures
+
+Results are tracked as meta.id
+
+## Add tax, microenv, name info to the mr results table 
+
+```{r}
+mr <- mr %>% 
+  left_join(meta.indices %>% 
+              select(meta.id, microenv, level, tax),
+            by = "meta.id")
+```
+
+## Add taxonomy clusters info
+```{r}
+mr <- tests %>% select(level, tax, microenv, name, cluster.member) %>% unique() %>% 
+  right_join(mr, by = c("level", "tax", "microenv"))
+```
+
+## Annotate ASV names to the table 
+
+#### Process data
+```{r}
+asv <- tax_table(ps)@.Data %>%
+  data.frame() %>% 
+  select(ASV, Genus, Species) %>% 
+  mutate(Genus.name = Genus) %>% 
+  mutate(Genus = str_sub(Genus, 1, 1) %>% 
+           paste0(., "."),
+         Genus = if_else(str_detect(Species, "(unc.)"),
+                         "",
+                         Genus)) %>% 
+  mutate(name = paste0("a.", ASV)) %>% 
+  mutate(newname = paste0("a." , ASV, "[", paste(Genus, Species),"]") %>% 
+           gsub("  ", " ", .) %>% 
+           gsub("a\\. ", "a\\.", .) %>% 
+           gsub("\\[ ", "\\[", .)) %>% 
+  mutate(level = "ASV",
+         tax = ASV) %>% 
+  select(name, newname, level, tax, Genus.name)
+
+species <- tax_table(ps)@.Data %>%
+  data.frame() %>% 
+  select(Genus, Species) %>% 
+  unique() %>% 
+  mutate(Genus.name = Genus) %>% 
+  mutate(Genus = if_else(str_detect(Species, "(unc.)"),
+                         "",
+                         Genus)) %>% 
+  mutate(name = paste0("s.", Species)) %>% 
+  mutate(newname = paste0("s.", paste(Genus, Species)) %>% 
+           gsub("  ", " ", .) %>% 
+           gsub("s\\. ", "s\\.", .) %>% 
+           gsub("\\[ ", "\\[", .)) %>% 
+  mutate(level = "Species",
+         tax = Species) %>% 
+  select(name, newname, level, tax, Genus.name)
+
+tx <- bind_rows(asv, species) 
+```
+
+### Annotate
+```{r}
+mr <- mr %>% 
+  left_join(tx,c("tax", "name", "level")) %>%
+  mutate(name = if_else(str_sub(name ,1,2) == "a.",
+                        newname,
+                        name)) %>% 
+  mutate(name = if_else(str_sub(name ,1,2) == "s.",
+                        newname,
+                        name)) %>% 
+  select(-newname) %>% 
+  mutate(Genus.name = if_else(is.na(Genus.name),
+                              name, 
+                              paste0("g.", Genus.name)))
+
+```
+
+# Add adjsuted P value
+
+```{r}
+mr <- mr %>% 
+  group_by(exposure, method) %>% 
+  mutate(padj = p.adjust(pval, "fdr")) %>% 
+  ungroup() %>% 
+  mutate(global.padj = p.adjust(pval, "fdr"))
+```
+
+# View final list of outcomes
+
+```{r}
+mr$outcome %>% unique()
+```
+
+# Write annotated
+
+```{r}
+paste0(d.out, "/", "mr.annotated.tsv") %>% 
+  write.table(mr, ., row.names = F, col.names = T, quote = F, sep = "\t")
+```
+
+# Filter
+
+```{r}
+mr <- mr %>% 
+  filter(padj < 0.05) %>% 
+  filter(method == "Inverse variance weighted") 
+```
+
+
+# Plot betas
+
+```{r, fig.width=10}
+mr <- mr %>% 
+  mutate(se = if_else(b < 0,
+                      -se,
+                      se)) %>% 
+  arrange(tax) %>% 
+  mutate(name = factor(name, levels = unique(name)))
+
+ggplot(mr, aes(x = fct_reorder(name, outcome), y=b, color = outcome)) +
+  geom_point(aes(shape = microenv), size = 2) +
+  ggpubr::rotate_x_text() +
+  coord_flip()+
+  geom_errorbar(aes(ymin=b-se, ymax=b+se), width=.1, alpha = 0.8) +
+  geom_hline(yintercept=0, 
+             color = "grey", size=0.5) +
+  scale_colour_colorblind() +
+  labs(y = "Effect size",
+       x = "Exposure (Mic. feature)", 
+       color = "Outcome",
+       shape = "Microenv.")
+```
+
+# Plot Fs
+
+```{r, fig.width=16}
+ggplot(mr, aes(paste(outcome, name, sep = ":"), `F`)) +
+  geom_col(aes(fill = name)) +
+  ggpubr::rotate_x_text() +
+  coord_flip() +
+  geom_hline(yintercept=10, linetype="dashed", 
+             color = "black", size=0.5)
+ggplot(mr, aes(paste(outcome, name,sep = ":"), F_min)) +
+  geom_col(aes(fill = name)) +
+  ggpubr::rotate_x_text() +
+  coord_flip() +
+  geom_hline(yintercept=10, linetype="dashed", 
+             color = "black", size=0.5)
+```
+
+
+# Write annotated filtered
+
+```{r}
+paste0(d.out, "/", "mr.annotated.filtered.tsv") %>% 
+  write.table(mr, ., row.names = F, col.names = T, quote = F, sep = "\t")
+```
+
+# Conclusion
+
+# Session information
+
+```{r}
+sessionInfo()
+```

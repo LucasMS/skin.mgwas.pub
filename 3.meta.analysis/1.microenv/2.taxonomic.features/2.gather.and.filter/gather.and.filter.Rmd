@@ -1,0 +1,269 @@
+---
+title: "Gather and filter metanalysis"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Library
+
+```{r}
+library(tidyverse)
+library(foreach)
+library(doParallel)
+library(qqman)
+library(data.table)
+```
+
+## Paths
+```{r}
+test.dir <- "/work_ifs/sukmb447/projects/skin.mgwas/results/2.statistical.tests/2.taxonomic.features/results"
+files <- list.files(test.dir)
+indexes <- "/work_ifs/sukmb447/projects/skin.mgwas/results/3.meta.analysis/1.microenv/2.taxonomic.features/metasoft/1.metaanalysis/prepare/meta.indices.rds" %>% 
+  readRDS()
+meta.dir <- "/work_ifs/sukmb447/projects/skin.mgwas/results/3.meta.analysis/1.microenv/2.taxonomic.features/metasoft/1.metaanalysis/meta"
+
+# Import lambda functions
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/estlambda/estlambda.R")
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/estlamb.R")
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/get.lambda.R")
+```
+
+# Register cores
+
+```{r}
+registerDoParallel(22)
+```
+
+# Function get data of individual tests
+
+```{r}
+# make function to run inside parallel for loop
+get.data <- function(x, df.i){
+  
+  chr.i <- df.i[x, "chr"]
+  test.1.i <- df.i[x, "test.1"]
+  test.2.i <- df.i[x, "test.2"]
+  index.1.i <- df.i[x, "index.1"]
+  index.2.i <- df.i[x, "index.2"]
+  meta.id.i <- df.i[x, "meta.id"]
+  
+  # Get cohort 1
+  f1 <- files[str_detect(files, paste0("test", test.1.i ,".","index", index.1.i, ".","chr", chr.i, ".taxtests.rds"))] %>% 
+    paste0(test.dir, "/", .) %>% 
+    readRDS() %>% 
+    select(snp.name, A, B, AA, AB, BB, n, P, Beta, StdErr, Conf2.5, Conf97.5)
+  
+  colnames(f1)[2:ncol(f1)] <- paste0(colnames(f1)[2:ncol(f1)], ".index1")
+  
+  # Get cohort 2
+  f2 <- files[str_detect(files, paste0("test", test.2.i ,".","index", index.2.i, ".","chr", chr.i, ".taxtests.rds"))] %>% 
+    paste0(test.dir, "/",.) %>% 
+    readRDS() %>% 
+    select(snp.name, A, B, AA, AB, BB, n, P, Beta, StdErr, Conf2.5, Conf97.5)
+  
+  colnames(f2)[2:ncol(f2)] <- paste0(colnames(f2)[2:ncol(f2)], ".index2")
+  
+  #Join cohorts
+  
+  f <- full_join(f1, f2, by = "snp.name") %>% 
+    mutate(meta.id = meta.id.i) %>%
+    left_join(indexes, by = "meta.id")
+  
+  return(f)
+}
+
+```
+
+# Function import and filter results
+
+```{r}
+read.and.filter <- function(i, filter){
+  
+  meta.id.i <- indexes[i,"meta.id"]
+  test.1.i <- indexes[i, "test.1"]
+  test.2.i <- indexes[i, "test.2"]
+  index.1.i <- indexes[i, "index.1"]
+  index.2.i <- indexes[i, "index.2"]
+  
+  
+  # Get individual tests
+  # Add single tests information
+  df.i <- data.frame(chr = 1:22, 
+                     meta.id = meta.id.i)  %>% 
+    left_join(indexes, by = c("meta.id"))
+  
+  tests.res <- NULL
+  for (x in 1:nrow(df.i)){
+    tests.res[[x]] <- get.data(x, df.i)
+  }
+  
+  tests.res <- tests.res %>% 
+    bind_rows() %>%
+    separate(snp.name, 
+             into = c("chr", "position"),
+             sep = ":", 
+             remove = F) %>% 
+    mutate(position = position %>% as.numeric,
+           chr = chr %>% as.numeric()) %>% 
+    arrange(chr, position)
+  
+  # Add meta-analysis results when necessary
+  
+  name.core <- paste0("meta", meta.id.i, ".test", test.1.i, ".test", test.2.i, ".index", index.1.i, ".index", index.2.i) 
+  
+  if(unique(df.i$microenv) != "Dry"){
+    
+    # read
+    tb <- paste0(meta.dir,"/", name.core, ".txt") %>% 
+      fread(., nThread = 1) %>% 
+      data.frame() %>% 
+      .[,1:16]
+    colnames(tb) <- colnames(tb) %>% make.names()
+    
+    # format
+    tb <- tb %>% 
+      rename("snp.name" = "RSID") %>% 
+      select(-X.STUDY)
+    # Format
+    
+    if(nrow(tb) == 0){tb[1,] <- NA} # necessary for binding indexes
+    
+    meta <- left_join(tests.res, tb, by = "snp.name")
+    rm(tests.res, tb)
+    
+  }else{
+    meta <- tests.res
+    rm(tests.res)
+  }
+  
+  # Define P.meta and significance
+  if(unique(df.i$microenv) != "Dry"){
+    meta <- meta %>% 
+      mutate(P.meta = PVALUE_FE)
+  }else{
+    meta$P.meta <- with(meta, pmin(P.index1, P.index2))
+  }
+  
+  # calculate and write lambda
+  
+  lamb <- get.lambda(meta$P.meta) %>%
+    cbind(indexes)
+  
+  f.name <- paste0(d.out, "/", "parsed", name.core, ".lambda.tsv")
+  write_tsv(lamb, f.name)
+  
+  
+  # write formatted
+  f.name <- paste0(d.out, "/", "parsed", name.core, ".txt")
+  write_tsv(meta, f.name)
+  system(paste("gzip", f.name))
+  
+  # Plot Manhattan
+  
+  paste0(d.out, "/", "parsed", name.core, ".man.jpeg") %>%
+    jpeg(width = 720, height = 480)
+  tryCatch({manhattan(meta, chr = "chr", bp = "position", snp = "snp.name", p = "P.meta")},
+           error = function(e) {NULL})
+  dev.off()
+  
+  # Plot qq
+  
+  paste0(d.out, "/", "parsed", name.core, ".qq.jpeg") %>%
+    jpeg(width = 720, height = 480)
+  tryCatch({qq(meta$P.meta)},
+           error = function(e) {NULL})
+  dev.off()
+  
+  
+  #Filter
+  meta <- meta %>% 
+    filter(P.meta < filter) %>% 
+    filter(P.index1 < 0.05 & P.index2 < 0.05)
+  
+  # Remove empty results
+  meta <- meta[!is.na(meta$snp.name),]
+  
+  return(meta)
+  
+}
+```
+
+
+# Import results and Filter
+```{r}
+res <- foreach (i=1:nrow(indexes)) %dopar% {
+                  read.and.filter(i, 5e-08)
+}
+res <- bind_rows(res)
+```
+
+# Format
+
+```{r}
+#save res.temp
+paste0(d.out, "/", "gather.meta.genomewide.rds") %>% 
+  saveRDS(res, .)
+```
+
+```{r}
+sessionInfo()
+```

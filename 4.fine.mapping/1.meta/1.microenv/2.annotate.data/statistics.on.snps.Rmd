@@ -1,0 +1,348 @@
+---
+title: "Get statistics from snps table"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "/home/lsilva/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw(base_size = 20))
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(phyloseq)
+```
+
+## Import data
+```{r}
+snps <- paste0(d.out, "/", "lead.snp.bacteria.all.tsv") %>% 
+  read_tsv()
+genes_annotation <- paste0(d.out, "/", "gene.annotation.tsv") %>% 
+  read_tsv
+ps <- "~/IKMB/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rds" %>% 
+  readRDS()
+```
+
+# Loci/lead snps stats
+
+## Different loci/lead snps
+
+```{r}
+snps %>% 
+  select(snp.name) %>% 
+  n_distinct()
+```
+
+## Per microenvironment
+
+```{r}
+loci_microenv <- snps %>% 
+  select(snp.name, microenv) %>% 
+  distinct() %>% 
+  count(microenv)
+loci_microenv
+
+plot_loci_microenv <- 
+  loci_microenv %>% 
+  ggplot(aes(x = fct_reorder(microenv, desc(n)), y = n)) +
+  geom_col(fill = "#CC79A7") +
+  ggpubr::rotate_x_text() +
+  labs(x = "Microenv.", y = "Loci (n)")
+plot_loci_microenv
+```
+
+## Per chromossome
+```{r}
+loci_chromossome <- snps %>% 
+  select(snp.name, chr) %>% 
+  distinct() %>% 
+  count(chr) %>% 
+  arrange(desc(n))
+
+loci_chromossome
+
+plot_loci_chromossome <- loci_chromossome %>% 
+  filter(n > 1) %>% 
+  mutate(chr = chr %>% as.character()) %>% 
+  ggplot(aes(x = fct_reorder(chr, desc(n)), y = n)) +
+  geom_col(fill = "#CC79A7") +
+  ggpubr::rotate_x_text() +
+  labs(x = "Chr.", y = "Loci (n)")
+plot_loci_chromossome
+
+```
+
+# Genes & features
+
+## Proccess genes by source
+
+### QTL
+```{r}
+c_names <- snps %>% 
+  mutate(n = str_count(gene.id, ",")) %>% 
+  pull(n) %>% 
+  max(na.rm = T)
+c_names <- paste0("gene.id", 1:(c_names+1))
+
+genes <- snps %>% 
+  select(gene.id) %>% 
+  separate(gene.id, into = c_names, sep = ",") %>% 
+  unlist(use.names = F) %>% 
+  unique()
+
+genes <- genes[!is.na(genes)]
+genes %>% cat
+```
+
+### eQTL
+
+```{r}
+c_names <- snps %>% 
+  mutate(n = str_count(egene.id, ",")) %>% 
+  pull(n) %>% 
+  max(na.rm = T)
+c_names <- paste0("gene.id", 1:(c_names+1))
+
+egene <- snps %>% 
+  select(egene.id) %>% 
+  separate(egene.id, into = c_names, sep = ",") %>% 
+  unlist(use.names = F) %>% 
+  unique()
+
+egene <- egene[!is.na(egene)]
+egene %>% cat
+```
+
+
+### Gather data
+
+```{r}
+genes <- data.frame(gene.id = genes, source = "QTL")
+egene <- data.frame(gene.id = egene, source = "eQTL")
+
+all_genes <- bind_rows(genes, egene)
+```
+
+
+### Add gene annotation
+
+```{r}
+#check if all genes there match with annotation
+identical(all_genes$gene.id %>% 
+            unique() %>%
+            sort(), 
+          genes_annotation$gene.id %>% 
+            sort())
+# Annotate
+all_genes <- left_join(all_genes, genes_annotation, by = "gene.id")
+```
+
+## Stats
+
+### By features
+```{r}
+all_genes %>% 
+  pull(gene.id) %>% 
+  n_distinct()
+
+all_genes %>% 
+  select(gene.name, gene.id, description) %>% 
+  distinct() %>% 
+  arrange(gene.name)
+```
+
+### By source
+
+```{r}
+all_genes %>% 
+  select(gene.name, gene.id, description, source) %>% 
+  distinct() %>% 
+  count(source)
+```
+
+### QTL and eQTL genes
+
+```{r}
+all_genes %>% 
+  select(gene.name, gene.id, description, source) %>% 
+  distinct() %>% 
+  count(gene.name, gene.id, description) %>% 
+  filter(n == 2) %>% 
+  arrange(gene.name)
+```
+
+
+# Microbial features
+
+## Feature types
+```{r}
+snps %>%
+  select(tax, level, type, name) %>% 
+  distinct() %>% 
+  count(type)
+```
+
+## Feature levels
+
+```{r}
+levels <- snps %>%
+  select(tax, level, type, name) %>%
+  distinct() %>% 
+  count(level)
+levels
+
+plot_level <- levels %>% 
+  filter(n > 1) %>% 
+  ggplot(aes(x = fct_reorder(level, desc(n)), y = n)) +
+  geom_col(fill = "#999999") +
+  ggpubr::rotate_x_text() +
+  labs(x = "Microb. features", y = "Count") +
+  coord_flip()
+plot_level
+```
+
+## By taxonomy
+
+### Pre-procces
+```{r}
+tax <- tax_table(ps)@.Data %>% 
+  data.frame() %>% 
+  tibble() %>% 
+  select(Genus, Species, ASV)
+```
+
+#### Make it tidy
+
+```{r}
+Genus <- tax %>% 
+  select(Genus) %>% 
+  distinct() %>% 
+  mutate(tax = Genus) %>% 
+  mutate(level = "Genus")
+
+Species <- tax %>% 
+  select(Genus, Species) %>% 
+  distinct() %>% 
+  rename("tax" = "Species") %>% 
+  mutate(level = "Species")
+
+ASV <- tax %>% 
+  select(Genus, ASV) %>% 
+  distinct() %>% 
+  rename("tax" = "ASV") %>% 
+  mutate(level = "ASV")
+
+tax_genus <- bind_rows(Genus, 
+                       Species,
+                       ASV
+) 
+rm(Genus, Species, ASV)
+```
+
+## Count summary by Genus
+
+```{r}
+genera_sub <- snps %>%
+  select(tax, level, type, name) %>%
+  distinct() %>% 
+  left_join(tax_genus, by = c("tax", "level")) %>% 
+  filter(!is.na(Genus)) %>% 
+  count(Genus) %>% 
+  arrange(desc(n))
+
+plot_genera <- genera_sub %>% 
+  filter(n > 1) %>% 
+  ggplot(aes(x = fct_reorder(Genus, desc(n)), y = n)) +
+  geom_col(fill = "#999999") +
+  ggpubr::rotate_x_text() +
+  labs(x = "Sub-family features", y = "Count") +
+  coord_flip() 
+plot_genera
+```
+
+# Combined summary
+
+```{r, fig.width= 14}
+g <- ggpubr::ggarrange(plot_loci_microenv, 
+                       plot_loci_chromossome,
+                       plot_level,
+                       plot_genera,
+                       ncol = 4, 
+                       labels = "AUTO",
+                       widths = c(0.6, 0.7, 0.95, 1.35))
+g
+
+plot_data <- list(loci_microenv, 
+                  levels %>% 
+                    filter(n > 1), 
+                  genera_sub %>% 
+                    filter(n > 1))
+names(plot_data) <- c("plot_loci_microenv",
+                      "plot_level",
+                      "plot_genera")
+paste0(d.out, "/", "plot.stats.df.rds") %>%
+  saveRDS(plot_data, .)
+
+```
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,232 @@
+---
+title: "Combine all metanalyses"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+Combine data from different meta-analysis into a single, annotated table
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(data.table)
+library(phyloseq)
+library(janitor)
+```
+
+## Set results directories
+
+I basically have two types of metanalysis, from beta-diversity and taxonomic features.
+```{r}
+d.in <- d.out
+```
+
+
+## Import data
+```{r}
+beta <- paste0(d.in,"/", "gather.selected.beta.rds") %>% 
+  readRDS()
+
+feature <- paste0(d.in,"/", "gather.selected.feature.rds") %>% 
+  readRDS()
+
+# Contains information about which taxa/features were tested in which meta.data run (meta.data.id)
+meta.indices <- readRDS("/work_ifs/sukmb447/projects/skin.mgwas/results/3.meta.analysis/1.microenv/2.taxonomic.features/metasoft/1.metaanalysis/prepare/meta.indices.rds")
+
+# Contains cluster information of the features, which features are clustered together
+tests <-  readRDS("/home/sukmb447/isilon/projects/skin.mgwas/results/2.statistical.tests/2.taxonomic.features/tests.rds")
+
+# Contains information about taxonomy. Useful for annotation of ASVs
+ps <- "/work_ifs/sukmb447/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rds" %>% 
+  readRDS()
+```
+
+
+
+# Proccess and harmonize Beta
+```{r}
+beta <- beta %>% 
+  mutate(metanalysis = if_else(microenv == "Dry",
+                               "comb",
+                               "meta"),
+         tax = "Beta-diversity",
+         name = "Beta-diversity",
+         level = "Bray-Curtis",
+         cluster.member = "no cluster",
+         type = "beta") %>% 
+  mutate(meta.id = meta.id %>% as.numeric())
+```
+
+
+# Process features
+
+## Join tables
+```{r}
+feature <- feature %>% 
+  mutate(metanalysis = if_else(microenv == "Dry",
+                               "comb",
+                               "meta")) %>% 
+  mutate(type = "feature")
+```
+
+## Add cluster info of taxonomic features 
+
+They are by microenvironment
+
+### Proccess data
+```{r}
+clusters.info <- tests %>% select(level, tax, microenv, name, cluster.member) %>% unique()
+```
+### Annotate
+```{r}
+
+feature <- feature %>% 
+  left_join(clusters.info, by = c("tax", "level", "microenv"))
+```
+
+## Annotate ASV names to the table 
+
+### Process data
+```{r}
+asv <- tax_table(ps)@.Data %>%
+  data.frame() %>% 
+  select(ASV, Genus, Species) %>% 
+  mutate(Genus = str_sub(Genus, 1, 1) %>% 
+           paste0(., "."),
+         Genus = if_else(str_detect(Species, "(unc.)"),
+                         "",
+                         Genus)) %>% 
+  mutate(name = paste0("a.", ASV)) %>% 
+  mutate(newname = paste0("a." , ASV, "[", paste(Genus, Species),"]") %>% 
+           gsub("  ", " ", .) %>% 
+           gsub("a\\. ", "a\\.", .) %>% 
+           gsub("\\[ ", "\\[", .)) %>% 
+  mutate(level = "ASV",
+         tax = ASV) %>% 
+  select(name, newname, level, tax)
+
+species <- tax_table(ps)@.Data %>%
+  data.frame() %>% 
+  select(Genus, Species) %>% 
+  unique() %>% 
+  mutate(Genus = if_else(str_detect(Species, "(unc.)"),
+                         "",
+                         Genus)) %>% 
+  mutate(name = paste0("s.", Species)) %>% 
+  mutate(newname = paste0("s.", paste(Genus, Species)) %>% 
+           gsub("  ", " ", .) %>% 
+           gsub("s\\. ", "s\\.", .) %>% 
+           gsub("\\[ ", "\\[", .)) %>% 
+  mutate(level = "Species",
+         tax = Species) %>% 
+  select(name, newname, level, tax)
+
+tx <- bind_rows(asv, species) 
+```
+
+### Annotate
+```{r}
+feature <- feature %>% 
+  left_join(tx,c("tax", "name", "level")) %>%
+  mutate(name = if_else(str_sub(name ,1,2) == "a.",
+                        newname,
+                        name)) %>% 
+  mutate(name = if_else(str_sub(name ,1,2) == "s.",
+                        newname,
+                        name)) %>% 
+  select(-newname)
+
+```
+
+
+# Combine beta and features
+
+```{r}
+# Make compatible
+feature <- feature %>% 
+  mutate(index.1 = index.1 %>% as.numeric(),
+         index.2 = index.2 %>% as.numeric())
+  
+# Join
+beta.feature <- bind_rows(beta, feature) %>% 
+  remove_empty("cols") %>% 
+  arrange(chr, position)
+```
+
+# Write output
+
+```{r}
+paste0(d.out, "./", "meta.selected.rds") %>% 
+  saveRDS(beta.feature,.)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

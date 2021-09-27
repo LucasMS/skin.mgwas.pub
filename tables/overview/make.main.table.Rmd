@@ -1,0 +1,289 @@
+---
+title: ""
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(kableExtra)
+library(scales)
+```
+
+## Import data
+```{r}
+snps <- "/home/lsilva/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/lead.snp.bacteria.all.tsv" %>% 
+  read_tsv()
+plot_snps <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/5.plot.manhattan/plot.df.RDS")
+```
+
+```{r}
+snps <- snps %>% 
+  mutate(`Microenv.` = microenv,
+         uniqID = snp.name,
+         Chr = chr,
+         Position = position %>% as.character(),
+         `Beta ± s.e.` = if_else(`Microenv.` == "Dry",
+                                 paste0(round(Beta.index2, 2), 
+                                        "±", 
+                                        round(StdErr.index2, 3)),
+                                 paste0(round(BETA_FE, 3), 
+                                        "±", 
+                                        round(STD_FE, 3))),
+         `Beta ± s.e.` = if_else(type == "beta", "-", `Beta ± s.e.`),
+         `N (total)` = n.index1 + n.index2,
+         `*P* value` = P.meta %>%  scientific() %>%
+           gsub("e-", "x10^-",.) %>%
+           paste0(., "^")) %>% 
+  rename("Effect allele" = "Effector.allele",
+         "Other allele" = "Other.allele")
+```
+
+# Combine taxonomies
+SNP rs55702239 have been identified in dry sites in related genus and Order. I will keep only the results values from genus, which represents the deepest level
+```{r}
+# Combine taxonomy
+tax <- NULL
+for (i in unique(snps$rsID)){
+  t <- snps %>%
+    filter(rsID == i) %>%
+    select(rsID, name)%>%
+    unique() %>%
+    pull(name) %>%
+    paste(collapse = ",")
+  tax <- bind_rows(tax, data.frame(rsID = i,
+                                   Feature = t))
+}
+
+snps <- snps %>% 
+  left_join(tax, by = "rsID") %>% 
+  filter(!(rsID == "rs55702239" & name == "o.Bacteroidales"))
+
+```
+
+
+# Annotate genes
+
+Use Bold for genes in locus and eQTL, italic for genes in eQTL only. For this, I need to unbuild columns with comma-separated genes. And build them again.
+## Proccess data
+```{r}
+identical(snps$rsID %>% length(), nrow(snps))
+
+# Genes
+c_names <- snps %>% 
+  mutate(n = str_count(genes, ",")) %>% 
+  pull(n) %>% 
+  max(na.rm = T)
+c_names <- paste0("gene", 1:(c_names+1))
+
+genes <- snps %>% 
+  select(round.index, meta.id, rsID, type, metanalysis, genes) %>% 
+  separate(genes, into = c_names, sep = ",") %>% 
+  pivot_longer(cols = starts_with("gene"),
+               values_to = "genes",
+               values_drop_na = T) %>% 
+  select(-name) %>% 
+  mutate(source = "genes")
+
+# egenes
+
+c_names <- snps %>% 
+  mutate(n = str_count(egene.name, ",")) %>% 
+  pull(n) %>% 
+  max(na.rm = T)
+c_names <- paste0("gene", 1:(c_names+1))
+
+
+egenes <- snps %>% 
+  select(round.index, meta.id, rsID, type, metanalysis, egene.name) %>% 
+  separate(egene.name, into = c_names, sep = ",") %>% 
+  pivot_longer(cols = starts_with("gene"),
+               values_to = "genes",
+               values_drop_na = T) %>% 
+  select(-name) %>% 
+  mutate(source = "egenes")
+
+#Combine data
+all.genes <- bind_rows(genes, egenes)
+
+
+locations <- all.genes %>% 
+  select(round.index, meta.id, rsID, type, metanalysis) %>% 
+  unique()
+
+df.f <- NULL
+for (i in 1:nrow(locations)){
+  
+  # Get genes according to locatoins
+  df.i <- locations[i,] %>% 
+    left_join(all.genes, by = c("round.index",
+                                "meta.id", 
+                                "rsID", 
+                                "type",
+                                "metanalysis"))
+  
+  # Format all genes depending on their sources
+  ugenes <- df.i %>% pull(genes) %>% unique()
+  
+  gene.f <- NULL
+  for (g in ugenes %>% sort()){
+    sources <- df.i %>% 
+      filter(genes == g) %>% 
+      pull(source)
+    g.f <- g
+    if(("egenes" %in% sources) &
+       !("genes" %in% sources)){g.f <- paste0("*",g, "*")} #italic
+    if(("egenes" %in% sources) &
+       ("genes" %in% sources)){g.f <- paste0("**",g, "**")} #bold
+    gene.f <- c(gene.f, g.f)
+  }
+  
+  # combine dfs
+  df.f <- df.i %>% 
+    select(round.index, meta.id, rsID, type, metanalysis) %>% 
+    unique() %>% 
+    mutate(genes = paste0(gene.f, collapse = ",")) %>% 
+    bind_rows(df.f,.)
+}
+
+df.f <- df.f 
+```
+# Add data
+
+```{r}
+snps <- left_join(snps %>% rename("genes.in.locus" = "genes"), df.f, by = c("type", "metanalysis", "rsID", "round.index", "meta.id")) %>% 
+  rename("Genes" = "genes") %>% 
+  mutate(Genes = if_else(is.na(Genes),
+                         "-",
+                         Genes))
+```
+
+# Edit scientific names
+```{r}
+# Edit scientific names
+snps <- snps %>% 
+  mutate(label = if_else(str_sub(Feature, 1, 1) %in% c("s", "g", "f"),
+                             str_replace(Feature, "\\.", "\\.\\*"),
+                         Feature),
+         label = if_else(
+           str_detect(label, "\\["),
+           str_replace(label, "\\[", "\\ [\\*"),
+           label),
+         label = case_when(str_detect(label, "(unc.)") ~ 
+                             str_replace(label, " \\(unc", "\\* \\(unc"),
+                           str_detect(label, "\\]") ~ str_replace(label, "\\]", "\\*\\]"),
+                           str_sub(label, 1, 1) %in% c ("a", "s", "g",  "f") ~ paste0(label, "*"),
+         TRUE ~ label)) %>% 
+  mutate(Feature = label)
+```
+
+#Final formatting
+```{r}
+snps <- snps %>%
+  arrange(as.numeric(Chr), as.numeric(Position)) %>% 
+  mutate(ID = 1:nrow(.)) %>% 
+  mutate(ID = 1:nrow(.)) %>% 
+  select(ID, Chr, Position, rsID, `Effect allele`, EAF, `Other allele`, Microenv., Feature,`N (total)`, `Beta ± s.e.`, `*P* value`, Genes)
+```
+
+
+# Output table
+```{r}
+snps %>% 
+  kable(escape = F) %>% 
+  kable_styling()
+```
+
+Single variant association tests were performed for each sample type and each microbial feature. Tests were adjusted for age, sex, BMI and genetic background (first ten genetic principal components). Positions are give as in genome assembly hg19 (GRCh37). Effect allele frequency (EAF) and total sample number (N) in for the meta-analysis (sample pairs for dry) are shown. Candidate loci from dry data sets were considered significant when at least one data set resulted in genome-wide (P < 5 x 10^-8^; lowest P-value shown) significance and the other in nominal significance (P < 0.05). Results from moist and sebaceous skin sites were combined by meta-analysis and considered significant when P value were genome-wide significant and data sets were nominal significant. Meta-analysis were weighted by sample size for multivariate microbial feature and by inverse variance for univariate features. Effect size (Beta) and its standard error (s.e.) from tests with volar forearm are shown for dry skin. Beta from meta-analysis is shown for moist and sebaceous. Tests were two-sided. Candidate causal variants were identified by fine-mapping or based on LD > 0.6 to the lead SNP. Genes with variants within their region (no formatted font) or with variants associated with their expression (italic font) are shown. Genes are shown in bold font when both conditions are met. Association with rs55702239 in dry site have been identified with the non-redundant features and o.Bacteroidales and g.Bacteroides. For simplicity, only statistics related to the genus level is shown. ENSG00000263272 is a novel transcript, antisense to RPAIN and ENSG00000269886 is a novel transcript, antisense to TTLL3.
+
+# Write table
+```{r}
+write_tsv(snps, paste0(d.out, "/", "raw.table.tsv"))
+```
+
+# Check if ID order match the figure labels
+
+## Get labels from plot
+```{r}
+label <- plot_snps %>% 
+  filter(!is.na(tax)) %>% 
+  mutate(label.key = sub(" : ", ":", label.key)) %>% 
+  mutate(label.key = sub(" : ", " - ", label.key)) %>% 
+  mutate(label.key = sub(":-", " - ", label.key)) %>% 
+  mutate(label.key = gsub(";", ",", label.key)) %>%
+  mutate(ID = label)
+```
+
+# Match and check
+
+```{r}
+to_check <- full_join(snps %>% select(rsID, ID),
+                      label %>% select(rsID, ID),
+                      by = c("ID"))
+identical(to_check$rsID.x, to_check$rsID.y)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

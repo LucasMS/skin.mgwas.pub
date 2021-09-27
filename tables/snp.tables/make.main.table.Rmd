@@ -1,0 +1,284 @@
+---
+title: ""
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(kableExtra)
+library(scales)
+```
+
+## Import data
+```{r}
+snps <- "/home/lsilva/IKMB/projects/skin.mgwas/results/tables/snp.tables/snp.fm.all.tsv" %>% 
+  read_tsv()
+```
+
+
+
+```{r}
+snps <- snps %>% 
+  mutate(`Microenv.` = microenv,
+         uniqID = snp.name,
+         Chr = chr,
+         Position = position %>% as.character(),
+         `Data 1:Beta ± s.e.` = paste0(round(Beta.index1, 2), 
+                                       "±", 
+                                       round(StdErr.index1, 3)),
+         `Data 2:Beta ± s.e.` = paste0(round(Beta.index2, 2), 
+                                       "±", 
+                                       round(StdErr.index2, 3)),
+         `Data 1:N` = n.index1,
+         `Data 2:N` = n.index2,
+         `Data 1:*P* value` = P.index1 %>%  scientific() %>%
+           gsub("e-", "x10^-",.) %>%
+           paste0(., "^"),
+         `Data 2:*P* value` = P.index2 %>%  scientific() %>%
+           gsub("e-", "x10^-",.) %>%
+           paste0(., "^"),
+         `Selection` = case_when(quality == "Set" ~ "FM",
+                                 quality == ">0.6" ~ "LD >0.6")) %>% 
+  mutate(cluster.member = if_else(str_detect(cluster.member, ";"),
+                                  cluster.member,
+                                  "-"),
+         `Lead SNP` = Lead.SNP) %>% 
+  # add datasets
+  mutate(`Data sets` = case_when(
+    `Microenv.` == "Dry" ~ "1:Dorsal forearm (PopGen)\n2:Volar forearm (PopGen)",
+    `Microenv.` == "Moist" ~ "1:Antecubital fossa (KORA FF4)\n2:Antecubital fossa (PopGen)",
+    `Microenv.` == "Sebaceous" ~ "1:Forehead (PopGen)\n2:Retroauricular fold (KORA FF4)")) %>% 
+  arrange(Chr, Position) %>% 
+  rename("Effect allele" = "Effector.allele",
+         "Other allele" = "Other.allele",
+         Feature = name,
+         `Features in cluster` = cluster.member)
+
+```
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# Annotate genes
+
+Use Bold for genes in locus and eQTL, italic for genes in eQTL only. For this, I need to unbuild columns with comma-separated genes. And build them again.
+## Proccess data
+```{r}
+identical(snps$rsID %>% length(), nrow(snps))
+
+# Genes
+c_names <- snps %>% 
+  mutate(n = str_count(gene.name, ",")) %>% 
+  pull(n) %>% 
+  max(na.rm = T)
+c_names <- paste0("gene", 1:(c_names+1))
+
+genes <- snps %>% 
+  select(round.index, meta.id, rsID, type, metanalysis, gene.name) %>% 
+  separate(gene.name, into = c_names, sep = ",") %>% 
+  pivot_longer(cols = starts_with("gene"),
+               values_to = "genes",
+               values_drop_na = T) %>% 
+  select(-name) %>% 
+  mutate(source = "genes")
+
+# egenes
+
+c_names <- snps %>% 
+  mutate(n = str_count(egene.name, ",")) %>% 
+  pull(n) %>% 
+  max(na.rm = T)
+c_names <- paste0("gene", 1:(c_names+1))
+
+
+egenes <- snps %>% 
+  select(round.index, meta.id, rsID, type, metanalysis, egene.name) %>% 
+  separate(egene.name, into = c_names, sep = ",") %>% 
+  pivot_longer(cols = starts_with("gene"),
+               values_to = "genes",
+               values_drop_na = T) %>% 
+  select(-name) %>% 
+  mutate(source = "egenes")
+
+#Combine data
+all.genes <- bind_rows(genes, egenes)
+
+
+locations <- all.genes %>% 
+  select(round.index, meta.id, rsID, type, metanalysis) %>% 
+  unique()
+
+df.f <- NULL
+for (i in 1:nrow(locations)){
+  
+  # Get genes according to locatoins
+  df.i <- locations[i,] %>% 
+    left_join(all.genes, by = c("round.index",
+                                "meta.id", 
+                                "rsID", 
+                                "type",
+                                "metanalysis"))
+  
+  # Format all genes depending on their sources
+  ugenes <- df.i %>% pull(genes) %>% unique()
+  
+  gene.f <- NULL
+  for (g in ugenes %>% sort()){
+    sources <- df.i %>% 
+      filter(genes == g) %>% 
+      pull(source)
+    g.f <- g
+    if(("egenes" %in% sources) &
+       !("genes" %in% sources)){g.f <- paste0("*",g, "*")} #italic
+    if(("egenes" %in% sources) &
+       ("genes" %in% sources)){g.f <- paste0("**",g, "**")} #bold
+    gene.f <- c(gene.f, g.f)
+  }
+  
+  # combine dfs
+  df.f <- df.i %>% 
+    select(round.index, meta.id, rsID, type, metanalysis) %>% 
+    unique() %>% 
+    mutate(genes = paste0(gene.f, collapse = ",")) %>% 
+    bind_rows(df.f,.)
+}
+
+df.f <- df.f 
+```
+# Add data
+
+```{r}
+snps <- left_join(snps %>% 
+                    rename("genes.in.locus" = "gene.name"),
+                  df.f, 
+                  by = c("type", 
+                         "metanalysis",
+                         "rsID",
+                         "round.index",
+                         "meta.id")) %>% 
+  rename("Genes" = "genes") %>% 
+  mutate(Genes = if_else(is.na(Genes),
+                         "-",
+                         Genes))
+
+```
+
+# Edit scientific names
+```{r}
+# Edit scientific names
+snps <- snps %>% 
+  mutate(label = if_else(str_sub(Feature, 1, 1) %in% c("s", "g", "f"),
+                             str_replace(Feature, "\\.", "\\.\\*"),
+                         Feature),
+         label = if_else(
+           str_detect(label, "\\["),
+           str_replace(label, "\\[", "\\ [\\*"),
+           label),
+         label = case_when(str_detect(label, "(unc.)") ~ 
+                             str_replace(label, " \\(unc", "\\* \\(unc"),
+                           str_detect(label, "\\]") ~ str_replace(label, "\\]", "\\*\\]"),
+                           str_sub(label, 1, 1) %in% c ("a", "s", "g",  "f") ~ paste0(label, "*"),
+         TRUE ~ label)) %>% 
+  mutate(Feature = label)
+```
+
+# Output table
+```{r}
+snps %>%
+  arrange(as.numeric(Chr), as.numeric(Position)) %>% 
+  select(Chr,
+         Position, 
+         rsID,
+         `Effect allele`,
+         EAF,
+         `Other allele`,
+         Microenv., 
+         Feature,
+         `Features in cluster`,
+         `Data sets`,
+         `Data 1:N`, 
+         `Data 1:Beta ± s.e.`,
+         `Data 1:*P* value`,
+         `Data 2:N`, 
+         `Data 2:Beta ± s.e.`,
+         `Data 2:*P* value`,
+         Genes,
+         Selection,
+         `Lead SNP`) %>% 
+  magrittr::set_colnames(str_remove(colnames(.), "Data [1-2]:")) %>% 
+  kable(escape = F) %>% 
+  #add_header_above(c("" = 9, "Data set 1" = 3, "Data set 2" = 3, "" = 2)) %>% 
+  add_header_above(data.frame(c1 = c("", "Data set 1", "Data set 2", ""), c2 = c(10,3,3,3))) %>% 
+  kable_styling()
+```
+
+Variants were selected based on loci fine mapping analysis (FM) or when variants had a linkage disequilibrium >0.6 (LD > 0.6). Single variant association tests were performed for each sample type and each microbial feature. Tests were adjusted for age, sex, BMI and genetic background (first ten genetic principal components). Microbial features were clustered to avoid redundancy. Positions are given as in genome assembly hg19 (GRCh37). Effect allele frequency (EAF) is indicated. Tests summaries, total sample number (N), effect size (Beta) and standard error (s.e.), are shown for tests data sets. Data sets 1 and 2 indicate each skin site and cohort combination per microenvironment. Genes with variants within their region (no formatted font) or with variants associated with their expression (italic font) are shown. Genes are shown in bold font when both conditions are met.
+
+# Write table
+```{r}
+write_tsv(snps, paste0(d.out, "/", "raw.table.tsv"))
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

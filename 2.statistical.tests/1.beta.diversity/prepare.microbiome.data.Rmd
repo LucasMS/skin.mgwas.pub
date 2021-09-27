@@ -1,0 +1,198 @@
+---
+title: "Prepare beta-diversity data for tests"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+  index: "1"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+   scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+# Set session parameters
+index <- params$index
+chr <- params$chr
+
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(phyloseq)
+library(vegan)
+```
+
+## Import data
+```{r}
+ps <- readRDS("~/IKMB/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rarefied.rds")
+
+pca <- paste0("~/IKMB/projects/skin.mgwas/results/1.data.harmonization/2.genotype/PopGen_and_KORA.harmonized.all.pca.eigenvec") %>% 
+  read.delim(sep = " ", header = F) %>% 
+  column_to_rownames("V1") %>% 
+  magrittr::set_colnames(c("Genotype_ID", paste0("PCA", 1:20)))
+```
+
+
+# Select site and cohort
+
+```{r}
+ps <- subset_samples(ps, index == .GlobalEnv$index) %>% 
+  prune_taxa(taxa_sums(.) > 0, .)
+```
+#Add Sync pca to ps object
+
+```{r}
+#extract meta and add pca
+meta <- sample_data(ps) %>% 
+  data.frame() %>% 
+  left_join(pca %>% select(-paste0("PCA", 11:20)), by = "Genotype_ID")
+rownames(meta) <- meta$NGS_ID
+#check
+checkpoint <- identical(meta %>% pull(NGS_ID), sample_data(ps) %>% pull(NGS_ID))
+if(!checkpoint){quit()}else{print("ok");rm(checkpoint)}
+# add to ps
+sample_data(ps) <- sample_data(meta)
+rm(meta)
+```
+
+# Make distance
+
+```{r}
+ps.dis <- ps %>% distance("bray", type = "samples")
+meta <- sample_data(ps) %>% data.frame()
+```
+
+# Get metadata
+
+```{r}
+metadata <- sample_data(ps) %>% data.frame()
+#check
+checkpoint <- identical(ps.dis %>% labels, sample_names(ps))
+if(!checkpoint){quit()}else{print("ok");rm(checkpoint)}
+```
+
+# Perform capscale
+
+```{r}
+cap <- capscale(ps.dis ~ Age + Sex + BMI + PCA1 + PCA2 + PCA3 + PCA4 + PCA5 +
+                PCA6 + PCA7 + PCA8 + PCA9 + PCA10, data = metadata)
+```
+## Visualize
+
+```{r}
+plot(cap)
+```
+
+# Extract residuals
+
+```{r}
+res.dis <- residuals(cap)
+```
+
+## Visualize
+
+```{r}
+mds.res <- metaMDS(res.dis)
+mds.micro <- metaMDS(ps.dis)
+
+to.plot1 <- mds.res$points[,1:2] %>% data.frame() %>% rownames_to_column("NGS_ID") %>% 
+  inner_join(metadata) %>% 
+  mutate(type = "residuals")
+to.plot2 <- mds.micro$points[,1:2] %>% data.frame() %>% rownames_to_column("NGS_ID") %>% 
+  inner_join(metadata) %>% 
+  mutate(type = "original")
+
+to.plot <- bind_rows(to.plot1, to.plot2)
+  
+
+to.plot
+
+ggplot(to.plot, aes(MDS1, MDS2, group = Genotype_ID)) +
+  geom_point(aes(color = type)) +
+  geom_line(alpha = 0.3)
+rm(mds.res, mds.micro,to.plot,to.plot1, to.plot2)
+```
+
+
+# Write output
+
+```{r}
+# Check
+checkpoint <- identical(labels(res.dis),metadata %>% rownames())
+if(!checkpoint){quit()}else{print("ok");rm(checkpoint)}
+
+# Make list
+res.data <- list(res.dis, metadata)
+names(res.data) <- c("distance", "metadata")
+paste0(d.out, "/", "index", index, ".residuals", ".rds") %>% 
+  saveRDS(res.data, .)
+```
+
+
+# Conclusion
+
+# Session information
+
+```{r}
+sessionInfo()
+```

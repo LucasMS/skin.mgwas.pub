@@ -1,0 +1,3 @@
+DIROUT="/home/lsilva/IKMB/projects/skin.mgwas/results/figures/figure.disease"
+FILENAME='figure'
+ 

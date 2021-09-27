@@ -1,0 +1,246 @@
+---
+title: "Compare groups using DESeq2"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+I will compare groups using deseq2. The script is divided into two parts. First, I have to format the input data and second I will perform deseq2 routine for all comparisons.
+
+Raw counts were used as input for linear models with negative binomial distribution. DESeq2 analysis was performed with standard configurations, which includes a Wald test and p-value adjustedment for multiple testing. Effect sizes were shrank using the R package apeglm. Results were filtered for significance (adjusted p-values < 0.05) and effect size (log2fold change > 1). 
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(biomaRt)
+library(tidyverse)
+library(SummarizedExperiment)
+library(MatrixGenerics)
+library(matrixStats)
+library(DESeq2)
+```
+
+## Import data
+```{r}
+metadata <- read.csv("~/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/0.prepare.data/rna.sample.sheet.csv")
+rna <- readRDS("~/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/1.nfrnaseq/star_salmon/salmon.merged.gene_counts.rds")
+tests <- read_tsv("/home/lsilva/IKMB/projects/skin.mgwas/scripts/10.2d.rnaseq/2.deseq2/tests.tsv")
+```
+
+
+# Format input data
+
+## Add metadata to rna experiment
+
+### Get experiment data
+```{r}
+experiment.meta <- colData(rna) %>% 
+  as.data.frame()
+```
+
+### Get metadata
+```{r}
+metadata <- metadata %>% 
+  mutate(names = paste0(group, "_", "R", replicate))
+```
+
+### Combine them
+
+```{r}
+merged.meta <- experiment.meta %>% 
+  left_join(metadata, by = "names")
+
+rownames(merged.meta) <- merged.meta$files
+identical(experiment.meta$files, merged.meta$files)
+```
+
+### Add to S4 object
+
+```{r}
+colData(rna) <- DataFrame(merged.meta)
+```
+
+## Add tests SummaziredExperiment
+
+### Format
+```{r}
+tests <- tests %>% 
+  mutate(index  = 1:nrow(.))
+```
+### Add to S4 object
+
+```{r}
+metadata(rna)$formula <- ~ group
+metadata(rna)$tests <- tests
+```
+
+## Save 
+
+```{r}
+paste0(d.out, "/", "summarized.experiment.rds") %>% 
+  saveRDS(rna, .)
+
+```
+# Annotate genes
+```{r}
+gene_mart <- useEnsembl(biomart = "ensembl", 
+                        dataset = "hsapiens_gene_ensembl")
+genes <- data.frame(Gene = rna@NAMES)
+
+genes.annotation <- getBM(attributes = c("ensembl_gene_id",
+                                           "external_gene_name",
+                                           "description",
+                                           "band",
+                                           "gene_biotype"), 
+                            filters = 'ensembl_gene_id', 
+                            values = genes$Gene, 
+                            mart = gene_mart) %>% 
+    separate(description, c("description"), sep = " \\[" )
+
+genes <- left_join(genes,
+                   genes.annotation,
+                   by = c("Gene" = "ensembl_gene_id")) %>% 
+  dplyr::rename(Gene_name = external_gene_name) %>% 
+  mutate(Gene_name = if_else(Gene_name == "" | is.na(Gene_name),
+                             Gene, 
+                             Gene_name))
+```
+
+
+# Perform analysis for each comparison
+
+## Comparisons
+
+```{r}
+metadata(rna)$tests
+```
+
+## Perform deseq2 routine
+```{r}
+for (index.i in metadata(rna)$tests$index){
+  
+  # Extract parameters 
+  params <- metadata(rna)$tests %>% filter(index == index.i)
+  to.test <- c(params$group1,params$group2) 
+  se <- rna[, rna$group %in% to.test]
+  
+  
+  # Extract data from SummarizedExperiment (would not be necessary, but I am finding a bug in DESeqDataSet)
+  
+  countdata <- round(assays(se)[["counts"]])
+  coldata <- colData(se) %>% 
+    data.frame() %>% 
+    mutate(group = factor(group, levels = to.test))
+  
+  # Make deseq object
+  dds <- DESeqDataSetFromMatrix(countData = countdata,
+                                colData = coldata,
+                                design = metadata(se)$formula)
+  # Perform test
+  dds <- DESeq(dds)
+  resultsNames(dds)[2]
+  res <- results(dds, name = resultsNames(dds)[2])
+  resLFC <- lfcShrink(dds, coef=resultsNames(dds)[2], type="apeglm")
+  resOrdered <- resLFC[order(resLFC$pvalue),]
+  
+  #  Explore
+  plotMA(resLFC, ylim=c(-2,2), main = resultsNames(dds)[2])
+  abline(h= 1, lty = 2, col = "grey")
+  abline(h= -1, lty = 2, col = "grey")
+  
+  ## Save results
+  
+  selected <- resLFC %>% 
+    data.frame() %>%
+    filter(abs(log2FoldChange) > 1, padj < 0.05) %>% 
+    arrange(padj) %>% 
+    bind_cols(params) %>% 
+    mutate(test = resultsNames(dds)[2]) %>% 
+    rownames_to_column("Gene") %>% 
+    left_join(genes, by = "Gene") %>% 
+    select(Gene, Gene_name, everything())
+  
+  all <- resLFC  %>% 
+    data.frame() %>% 
+    arrange(padj) %>% 
+    bind_cols(params) %>% 
+    mutate(test = resultsNames(dds)[2])  %>% 
+    rownames_to_column("Gene") %>% 
+    left_join(genes, by = "Gene") %>% 
+    select(Gene, Gene_name, everything())
+  
+  paste0(d.out, "/", index.i,".", resultsNames(dds)[2],".filtered.tsv" ) %>% 
+    write_tsv(selected, .)    
+  paste0(d.out, "/", index.i,".", resultsNames(dds)[2],".all.tsv" ) %>% 
+    write_tsv(all, .)  
+}
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

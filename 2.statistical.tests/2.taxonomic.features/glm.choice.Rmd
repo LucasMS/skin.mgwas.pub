@@ -1,0 +1,198 @@
+---
+title: "Choice of the glm algorithm"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+Should I use MASS or MVabund algorithm?
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+   scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+
+library(MASS)
+library(tidyverse)
+library(phyloseq)
+library(mvabund)
+
+```
+
+## Function
+```{r}
+do.MASS <- function (testdata) {
+    glm.nb(tax ~ Age + Sex + BMI + PCA1 + PCA2 + PCA3 + PCA4 + PCA5 + PCA6 + PCA7 + PCA8 + PCA9 + PCA10 + offset(log(library.size)), data=testdata) %>% 
+      AIC() %>% 
+      data.frame(formula = "MASS", AIC =.) %>%
+      mutate(test = id.test) %>% 
+      return()
+  }
+  
+  do.mvabund <- function (testdata) {
+    manyglm(tax ~ Age + Sex + BMI + PCA1 + PCA2 + PCA3 + PCA4 + PCA5 + PCA6 + PCA7 + PCA8 + PCA9 + PCA10 + offset(log(library.size)), data=testdata, family="negative.binomial") %>% 
+      AIC() %>% 
+      data.frame(formula = "mvabund", AIC =.) %>%
+      mutate(test = id.test) %>% 
+      return()
+  }
+```
+
+
+#  Perform the loop
+
+
+```{r}
+res <-NULL 
+for (i in 1:528){
+  id.test <- i
+  params <- readRDS("~/IKMB/projects/skin.mgwas/results/2.statistical.tests/2.taxonomic.features/tests.rds") %>% 
+    filter(test.id == get("id.test"))
+  
+  
+  level = params %>% pull(level) %>% as.character()
+  tax = params %>% pull(tax) %>% as.character()
+  index = params %>% pull(index) %>% as.character()
+  ncore = params %>% pull(ncore) %>% as.numeric()
+  
+  # Import data ----
+  
+  # Import microbiome data
+  
+  ps <- paste0("./microbiome.data/index", index, ".ps.rds") %>% 
+    readRDS()
+  
+  # Select metadata
+  testdata <- ps %>% sample_data() %>% data.frame() %>% select(Age, Sex, BMI, PCA1, PCA2, PCA3, PCA4, PCA5, PCA6, PCA7, PCA8, PCA9, PCA10, Genotype_ID)
+  
+  # Add tax data
+  e <- paste0(level, "==", "'",tax, "'")
+  
+  tax.data <- ps %>% tax_glom(level) %>% subset_taxa(eval(parse(text = e)))
+  testdata$tax <- otu_table(tax.data)@.Data
+  tax.name <- tax_table(tax.data)@.Data %>% data.frame(stringsAsFactors = F) %>% select_if(~ !any(is.na(.))) %>% .[1,] %>% paste(collapse = ";")
+  # Add check
+  identical(rownames(testdata), rownames(otu_table(tax.data)@.Data))
+  
+  
+  # add offsets
+  testdata$library.size = sample_sums(ps)
+  
+  # Get zero-truncated abundance of bacterial features and filter them for extreme outliers, deviating more than 5× the interquartile range (IQR) from the median abundance
+  
+  
+  testdata <- testdata[testdata$tax > 0,]
+  med <- median(testdata$tax)
+  qt <- quantile(testdata$tax, c(0.25,0.75))
+  iqr <- qt[2] - qt[1]
+  testdata <- testdata[testdata$tax < (med + 5*iqr),]
+  
+  # Keep only complete cases
+  
+  testdata <- testdata[complete.cases(testdata),]
+  
+  print(paste("index", index, "level", level, "tax", tax, "nrow", nrow(testdata)))
+  
+  # Fit GLMs
+  
+  df <- tryCatch(do.MASS(testdata), error = function(e){data.frame(formula = "MASS", AIC = NA, test = id.test)})
+  res <- rbind(res, df)
+  
+  df <- tryCatch(do.mvabund(testdata), error = function(e){data.frame(formula = "mvabund", AIC = NA, test = id.test)})
+  res <- rbind(res, df)
+}
+
+```
+
+# Visualize the results
+
+```{r}
+res2 <- res  %>% spread(formula, AIC) %>% mutate(diff = MASS - mvabund) %>% mutate(res = if_else(diff < 0,
+                                                                                                 "MASS",
+                                                                                                 "mvabund"))
+res2 %>% count(res)
+
+# 
+ggpubr::ggscatter(res2 %>% filter(!is.na(MASS)), x = "MASS", y = "mvabund",
+                  add = "reg.line",                                 # Add regression line
+                  conf.int = TRUE,                                  # Add confidence interval
+                  add.params = list(color = "blue",
+                                    fill = "lightgray")) +
+  ggpubr::stat_cor(method = "pearson", label.x = 3, label.y = 30) +
+  ggpubr::stat_regline_equation()
+
+res %>% filter(!is.na(AIC)) %>% count(formula)
+
+```
+
+
+# Conclusion
+
+Mvabund has insignificantly slightly worst fitting. However, it is capable of fitting all the models, while the the MASS glm.nd does not. So I am fitting with mvabund.
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

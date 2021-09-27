@@ -1,0 +1,203 @@
+---
+title: "Gather results from single tests and finemapping"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(data.table)
+```
+
+## Import data
+```{r}
+fm.snps <- read_tsv("/work_ifs/sukmb447/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/all.snps.from.mapping.tsv")
+
+# Add results directory
+beta.dir <- "/work_ifs/sukmb447/projects/skin.mgwas/results/3.meta.analysis/1.microenv/1.beta.diversity/2.gather.and.filter"
+feature.dir <- "/work_ifs/sukmb447/projects/skin.mgwas/results/3.meta.analysis/1.microenv/2.taxonomic.features/2.gather.and.filter"
+
+# Add datasets indexes
+beta.indexes <- data.frame(index.1 = c(1,3,4),
+                           index.2 = c(2,6,5),
+                           microenv = c("Moist", "Dry", "Sebaceous")) %>% 
+  mutate(meta.id = paste0(index.1, index.2))
+feature.indexes <- "/work_ifs/sukmb447/projects/skin.mgwas/results/3.meta.analysis/1.microenv/2.taxonomic.features/metasoft/1.metaanalysis/prepare/meta.indices.rds" %>% 
+  readRDS()
+```
+
+# Get indexes to consider
+Because tests and indexed, one for beta-diversity another for taxonomic features, I want to sort the indexes of the snps that resulted from finemapping, so I read only the files that I am interested in.
+
+```{r}
+fm.indexes <- fm.snps %>% 
+  select(meta.id, metanalysis, type) %>% 
+  distinct()
+```
+# Get indexes from tests
+
+```{r}
+beta.indexes <- beta.indexes %>% 
+  mutate(index.1 = index.1 %>% as.character(),
+         index.2 = index.2 %>% as.character(),
+         meta.id = meta.id %>% as.numeric(),
+         type = "beta",
+         metanalysis = if_else(microenv == "Dry",
+                               "comb",
+                               "meta"))
+
+
+feature.indexes <- feature.indexes %>% 
+  mutate(type = "feature",
+         metanalysis = if_else(microenv == "Dry",
+                               "comb",
+                               "meta"))
+test.indexes <- bind_rows(beta.indexes, feature.indexes)
+```
+
+# Filter test.indexes
+Keep only the indexes for the files that contain info about the finemapping snps.
+
+```{r}
+test.indexes <- left_join(fm.indexes, test.indexes,
+                          by = c("meta.id", "metanalysis", "type"))
+```
+
+# Collect data for tests on taxonomic features sets
+```{r}
+# Function
+get.data <- function(row.number){
+  # Set paramenters
+  i <- row.number #indexes row number
+  type.i <- indexes[i,"type", drop = T]
+  meta.id.i <- indexes[i,"meta.id", drop = T]
+  test.1.i <- indexes[i, "test.1", drop = T]
+  test.2.i <- indexes[i, "test.2", drop = T]
+  index.1.i <- indexes[i, "index.1", drop = T]
+  index.2.i <- indexes[i, "index.2", drop = T]
+  
+  # Read tests on features and betadiversity tests. They have different name structures and folders.
+  
+  if (type.i == "beta"){
+    name.file <-  paste0(beta.dir, "/", "gathered.meta", meta.id.i, ".tsv.gz")
+    
+    df.i <- fread(name.file)
+  }
+  
+  if (type.i == "feature"){
+    name.file <- paste0("meta",
+                        meta.id.i,
+                        ".test", 
+                        test.1.i,
+                        ".test", 
+                        test.2.i, 
+                        ".index", 
+                        index.1.i, 
+                        ".index", 
+                        index.2.i) %>%  
+      paste0(feature.dir, "/", "parsed", ., ".txt.gz")
+    
+    df.i <- fread(name.file)
+  }
+  
+  # Select snps of interest
+  
+  fm.snps.i <- fm.snps %>% 
+    filter(meta.id == meta.id.i,
+           type == type.i) %>% 
+    select(snp.name)
+  
+  df.i <- left_join(fm.snps.i, df.i, by = "snp.name")
+  
+  return(df.i)
+}
+
+
+# Run beta
+indexes <- test.indexes %>% filter(type == "beta")
+beta.tests.results <- map(1:nrow(indexes), ~ get.data(.x)) %>% 
+  bind_rows()
+
+# Run features
+
+indexes <- test.indexes %>% filter(type == "feature")
+feature.tests.results <- map(1:nrow(indexes), ~ get.data(.x)) %>% 
+  bind_rows()
+```
+
+# Save outputs
+
+```{r}
+# Beta
+paste0(d.out, "/","gather.selected.beta.rds") %>% 
+  saveRDS(beta.tests.results, .)
+
+# Feature
+paste0(d.out, "/","gather.selected.feature.rds") %>% 
+  saveRDS(feature.tests.results, .)
+
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

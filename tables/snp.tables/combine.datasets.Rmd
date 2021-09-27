@@ -1,0 +1,151 @@
+---
+title: "Join annotation and have an overview"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+```
+
+## Import data
+```{r}
+meta <- "~/IKMB/projects/skin.mgwas/results/tables/snp.tables/snp.tables/meta.selected.rds" %>% 
+  readRDS() # casual snps and LD > 0.6
+
+snps <- "~/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/all.snps.from.mapping.tsv" %>% 
+  read_tsv()
+
+lead.snps <- "~/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/lead.snp.bacteria.all.tsv" %>% 
+  read_tsv()
+  
+```
+## Edit metadata
+
+```{r}
+# Edit meta results, keep only the the lead snps
+meta <- meta %>% 
+  mutate(A = A.index1,
+         B = B.index1) %>% 
+  select(meta.id, 
+         snp.name, 
+         chr,
+         position, 
+         A, 
+         B, 
+         tax,
+         P.meta,
+         name,
+         cluster.member, 
+         level, 
+         microenv,
+         metanalysis,
+         type,
+         P.index1,
+         P.index2,
+         Beta.index1,
+         Beta.index2,
+         StdErr.index1,
+         StdErr.index2, 
+         n.index1,
+         n.index2, 
+         BETA_FE,
+         STD_FE) %>% 
+  mutate(meta.id = meta.id %>% as.numeric()) %>%
+  unique()
+```
+
+
+## Combine data
+```{r}
+comb <- snps %>% 
+  right_join(meta, by = c("chr_name" = "chr", 
+                          "position",
+                          "meta.id",
+                          "type",
+                          "metanalysis",
+                          "snp.name")) %>% 
+  rename("chr" = "chr_name" ) %>% 
+  rename("rsID" = "refsnp_id") %>% 
+  left_join(lead.snps %>% mutate(Lead.SNP = rsID) %>% 
+              select(Lead.SNP, round.index, meta.id, type, metanalysis),
+            by = c("round.index", "meta.id", "type", "metanalysis"))
+```
+
+# Write output
+
+```{r}
+write.table(comb, paste0(d.out, "/", "snp.fm.all.tsv") , quote = T, sep = "\t", row.names = F)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,2 @@
+DIROUT='/home/lsilva/IKMB/projects/skin.mgwas/results/tables/cohort.summary'
+FILENAME="make.summary.table"

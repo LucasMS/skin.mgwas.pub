@@ -1,0 +1,326 @@
+---
+title: "Retrive snps and genes from fine mapping"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+  index: "5"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+index <- params$index
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(biomaRt)
+library(tidyverse)
+```
+
+## Import data
+```{r}
+d.in <- "~/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/1.analysis/1.analysis"
+d.in.list <- d.in %>% 
+  list.dirs(recursive = F)
+```
+
+# Get files
+```{r}
+folder.id <- d.in.list %>% 
+  data.frame(d.in = .) %>% 
+  separate(d.in, c(c(1:12) %>% as.character(), "folder"), sep = "/") %>% 
+  pull(folder) %>% 
+  .[str_detect(.,paste0("^",index, ".meta"))]
+
+id.df <- folder.id %>% 
+  data.frame(folder.id = .) %>% 
+  separate(folder.id, c("round.index", "meta.id","type","metanalysis"), sep = "\\.")
+#get name core
+name.core <-paste(id.df, collapse = ".")
+#format df with round information
+id.df <-  id.df %>% 
+  mutate(meta.id = meta.id %>% gsub("meta", "",.),
+         type = type %>% gsub("type", "",.),
+         metanalysis = metanalysis %>% gsub("metanalysis", "",.))
+```
+
+# Read finemapping output
+
+```{r}
+
+fin <- list.files(paste0(d.in, "/", folder.id, "/", "results/"),
+                  recursive = T, 
+                  pattern = "*.Rdata") %>% 
+  .[str_detect(.,"/chr")] %>% 
+  paste0(d.in, "/", folder.id, "/", "results/", .)
+
+load(fin)
+```
+
+# Load biomart annotations
+```{r}
+snp_mart <- useMart(biomart="ENSEMBL_MART_SNP",
+                    host="grch37.ensembl.org",
+                    path="/biomart/martservice",
+                    dataset="hsapiens_snp")
+gene_mart <- useEnsembl(biomart = "ensembl", 
+                        dataset = "hsapiens_gene_ensembl")
+
+```
+
+# Snps
+
+```{r}
+# Annotate positions
+metal <- metal %>% 
+  separate(MarkerName, c("chr_name", "position"), sep = ":") %>% 
+  mutate(chr_name = chr_name %>% 
+           gsub("chr", "", .) %>% 
+           as.numeric(),
+         position = position %>% 
+           as.numeric()) %>% 
+  unique()
+
+# Get snps from the fine mapping region
+snps <- tryCatch({fmregions %>% 
+    select(snp) %>% 
+    separate(snp, c("chr_name", "position"), sep = ":", remove = T) %>%
+    mutate(chr_name = as.numeric(chr_name)) %>% 
+    mutate(position = as.numeric(position)) %>% 
+    left_join(metal %>% select(chr_name, position, rsquare, P.value, group), by = c("chr_name", "position"))},
+    # Deal when no finemapping is available
+    error = function(x){metal %>% 
+        select(chr_name, position, rsquare, P.value, group)})
+
+#Format snps
+snps <- snps %>% 
+  mutate(chromosomal_region = paste(unique(chr_name), position, position, sep =":")) %>% 
+  mutate(start = position,
+         end = position) %>% 
+  mutate(quality = "Set") %>% 
+  mutate(Lead = if_else(group == 7,
+                        "yes",
+                        "no")) %>% 
+  select(-group)
+
+
+# If there is a lot of snps, select only the ones in high LD 
+if(nrow(snps) > 50){
+  snps <- snps %>% 
+    filter(rsquare > 0.6) %>% 
+    mutate(quality = ">0.6")
+}
+
+```
+
+
+# Functions
+## Annotate snps
+
+Annotation of snps is based on the single nucleotide position. 
+
+```{r}
+annotate.snp <- function(x){
+  # Annotate snps
+  raw.annotation <- getBM(attributes = c("refsnp_id",
+                                         "chr_name", 
+                                         "chrom_start", 
+                                         "chrom_end",
+                                         "allele_1", 
+                                         "minor_allele",
+                                         "clinical_significance",
+                                         "synonym_name", 
+                                         "ensembl_gene_stable_id", 
+                                         "consequence_type_tv"), 
+                          filters = 'chromosomal_region', 
+                          values = snps$chromosomal_region, 
+                          mart = snp_mart) %>% 
+    mutate(chromosomal_region = paste(unique(chr_name), 
+                                      chrom_start, 
+                                      chrom_end, 
+                                      sep =":")) %>% 
+    right_join(snps, by = c("chr_name", "chromosomal_region"))
+  
+  # Filter data. Remove deletions or insertions. These are only considered when no rsID annotation is left after them removal. In this case, I will keep the rsID recovered. This exception is just for 3 out of ~600 variants. These are shown as deletion in biomart but substitution in SNP NCIB. for example, rs152787,rs55736426,rs17100279 
+  snp.annotation <- list()
+  for (i in raw.annotation$chromosomal_region %>% unique){
+    snp.raw <- raw.annotation %>% 
+      filter(chromosomal_region == i)
+    
+    snp.annotation.i <- snp.raw %>%  
+      filter(str_length(allele_1) == 1, str_length(minor_allele) == 1)
+    
+    if(nrow(snp.annotation.i) == 0){
+      snp.annotation.i <- snp.raw %>%  
+        mutate(allele_1 = if_else(allele_1 == "", "N", allele_1),
+               minor_allele = if_else(minor_allele == "", "N", minor_allele)) %>% 
+        filter(str_length(allele_1) == 1, str_length(minor_allele) == 1) %>% 
+        mutate(allele_1 = if_else(allele_1 == "N", "", allele_1),
+               minor_allele = if_else(minor_allele == "N", "", minor_allele))
+    }
+    snp.annotation[[i]] <- snp.annotation.i
+    rm(snp.annotation.i)
+  }
+  
+  # Summarize  data
+  snp.annotation <- snp.annotation %>% 
+    bind_rows() %>% 
+    group_by(refsnp_id,chr_name, chrom_start, chrom_end, allele_1, minor_allele, chromosomal_region, position, start, end, quality, rsquare, P.value, Lead) %>% 
+    summarise(clinical_significance = clinical_significance %>% 
+                unique() %>% 
+                paste(collapse = ";"),
+              synonym_name = synonym_name %>% 
+                unique() %>% 
+                paste(collapse = ";"),
+              ensembl_gene_stable_id = ensembl_gene_stable_id %>% 
+                unique() %>% 
+                paste(collapse = ";"),
+              consequence_type_tv = consequence_type_tv %>% 
+                unique() %>% 
+                paste(collapse = ";")) %>% 
+    ungroup()
+  # Check if all are annotated
+  check <- (duplicated(snp.annotation$chromosomal_region) %>% sum() == 0) &
+    identical(unique(snp.annotation$chromosomal_region) %>% sort,
+              unique(snps$chromosomal_region) %>% sort)
+  if (check == F){q(save ="no")}
+  snp.results <- list(snp.annotation, raw.annotation)
+  names(snp.results) <- c("snp.annotation", "raw.annotation")
+  return(snp.results)
+}
+```
+
+
+
+## Annotate genes
+
+```{r}
+annotate.genes <- function(x){
+  genes <- raw.annotation %>% 
+    select(refsnp_id, ensembl_gene_stable_id) %>% 
+    right_join(snp.annotation %>% select(refsnp_id), by = "refsnp_id") %>% 
+    select(ensembl_gene_stable_id) %>% 
+    filter(ensembl_gene_stable_id != "") %>% 
+    unique()
+  
+  genes.annotation <- getBM(attributes = c("ensembl_gene_id",
+                                           "external_gene_name",
+                                           "description",
+                                           "band",
+                                           "gene_biotype"), 
+                            filters = 'ensembl_gene_id', 
+                            values = genes$ensembl_gene_stable_id, 
+                            mart = gene_mart) %>% 
+    separate(description, c("description"), sep = " \\[" )
+  return(genes.annotation)
+}
+```
+
+
+# Annotate
+
+## snps
+```{r}
+snps.info <- annotate.snp(x)
+
+raw.annotation <- snps.info$raw.annotation
+snp.annotation <- snps.info$snp.annotation %>% bind_cols(id.df)
+
+#Do not write results if I have different number of snp annotation than the number of snps to be annotated. This is an indication that my mapping based on position was not 1:1
+if(nrow(snps) == nrow(snp.annotation)){
+  write.table(snp.annotation, 
+              paste0(d.out, "/", name.core,".snps.tsv"),
+              row.names = F, sep = "\t",
+              quote = F) }
+```
+## gene
+
+```{r}
+if(setdiff(snp.annotation$ensembl_gene_stable_id %>% unique(), "") != "NA"){
+  gene.annotation <- annotate.genes() 
+}else{
+  gene.annotation <- data.frame(ensembl_gene_id = NA,
+                                external_gene_name = NA,
+                                description = NA,
+                                band = NA,
+                                gene_biotype = NA)
+}
+
+# Add info of the round
+gene.annotation <- gene.annotation %>%
+  bind_cols(id.df)
+
+write.table(gene.annotation, 
+            paste0(d.out, "/", name.core,".genes.tsv"),
+            row.names = F, sep = "\t",
+            quote = F)
+```
+
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

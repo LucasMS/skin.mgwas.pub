@@ -1,0 +1,247 @@
+---
+title: "Prepare data"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(phyloseq)
+library(foreach)
+library(doParallel)
+```
+
+## Import data
+```{r}
+ps <-
+  "/work_ifs/sukmb447/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rds" %>% 
+  readRDS()
+tests <-
+  "/work_ifs/sukmb447/projects/skin.mgwas/results/2.statistical.tests/2.taxonomic.features/tests.rds" %>% 
+  readRDS()
+results.dir <- "/work_ifs/sukmb447/projects/skin.mgwas/results/2.statistical.tests/2.taxonomic.features/results/"
+```
+
+## Add functions to estimate labda
+
+```{r}
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/estlamb.R")
+source("/work_ifs/sukmb447/projects/skin.mgwas/scripts/functions/estlambda/estlambda.R")
+```
+
+
+# Function to calculate genomic inflation
+```{r}
+get.lambda <- function(p){
+  lambda.i <- tryCatch(
+    {
+      #Method 1:
+      l1 <- estlambda(p)
+      
+      #Method 2:
+      l2 <- estlamb(p)
+      
+      data.frame(estimate.genAbel = l1$estimate,
+                 se.genAbel = l1$se,
+                 estimate.2 = l2)},
+    error=function(e) {data.frame(estimate.genAbel = NA,
+                                   se.genAbel = NA,
+                                   estimate.2 = NA)}
+    )
+  return(lambda.i)
+}
+
+```
+
+# Make indeces of tests combination
+
+```{r}
+pairs <- tests %>% 
+  select(microenv, level, tax) %>% 
+  unique()
+
+for (i in 1:nrow(pairs)){
+  ids <- pairs[i,] %>% 
+    left_join(tests, by = c("microenv", "level", "tax")) %>% 
+    select(index, test.id) %>% 
+    arrange(index) 
+  pairs[i, "index.1"] <- ids$index[1]
+  pairs[i, "index.2"] <- ids$index[2]
+  pairs[i, "test.1"] <- ids$test.id[1]
+  pairs[i, "test.2"] <- ids$test.id[2]
+}
+
+# add meta index
+pairs <- pairs %>% 
+  ungroup() %>% 
+  mutate(meta.id = 1:n())
+
+```
+
+# Format results to metasoft
+
+## Function for foreach loop
+```{r}
+write2meta.and.lambda <- function(i){
+  # get variables
+  test.1 <- pairs[i,"test.1"] %>% paste0("test",.) 
+  test.2 <- pairs[i,"test.2"] %>% paste0("test",.)
+  index.1 <- pairs[i,"index.1"] %>% paste0("index",.) 
+  index.2 <- pairs[i,"index.2"] %>% paste0("index",.)
+  meta.id <- pairs[i,"meta.id"] %>% paste0("meta",.)
+  
+  start_time <- Sys.time()
+  # Dfs to store p-values
+  p1 <- NULL
+  p2 <- NULL
+  # Dfs to store results for meta analysis
+  paired.result <- NULL
+  for (chr in 1:22){
+    # Get variables
+    chr.round <- paste0("chr", chr)
+    
+    # Get files
+    res1 <- paste(test.1, index.1, chr.round, sep = ".") %>% 
+      paste0(".taxtests.rds") %>% 
+      paste0(results.dir, .) %>% 
+      readRDS() %>% 
+      select(snp.name, Beta, StdErr, P)
+    res2 <- paste(test.2, index.2, chr.round, sep = ".") %>% 
+      paste0(".taxtests.rds") %>% 
+      paste0(results.dir, .) %>% 
+      readRDS() %>% 
+      select(snp.name, Beta, StdErr, P)
+    
+    # Check
+    checkpoint <- identical(res1$snp.name, res2$snp.name)
+    if(!checkpoint){print(paste("unmatched cols:",meta.id,chr.round))}else{print("ok");rm(checkpoint)}
+    
+    # Combine files
+    res <- full_join(res1 %>% select(-P), res2 %>% select(-P), by = "snp.name")
+    
+    paired.result <- rbind(paired.result, res)
+    
+    # Get p values for each file
+    p1 <- res1 %>% select(snp.name, Beta, StdErr, P) %>% rbind(p1, .)
+    p2 <- res2 %>% select(snp.name, Beta, StdErr, P) %>% rbind(p2, .)
+    rm(res)
+  }
+  
+  # Remove snps that are not in both tests
+  
+  print(paste(meta.id, "snps:", nrow(paired.result)))
+  
+  paired.result <- paired.result[complete.cases(paired.result),]
+  
+  print(paste(meta.id, "snps in common:", nrow(paired.result)))
+  
+  # get Lambda values
+  l1 <- get.lambda(p1$P) %>% mutate(index = index.1 %>% gsub("index", "",.),
+                                    test.id = test.1 %>% gsub("test", "",.) %>% as.numeric()) %>% 
+    left_join(tests, by = c("index", "test.id"))
+  
+  l2 <- get.lambda(p2$P) %>% mutate(index = index.2 %>% gsub("index", "",.),
+                                    test.id = test.2 %>% gsub("test", "",.) %>% as.numeric()) %>% 
+    left_join(tests, by = c("index", "test.id"))
+  
+  l <- rbind(l1,l2)
+  
+  # Write paired results to meta analysis
+  paste(meta.id, test.1, test.2, index.1, index.2, "txt", sep = ".") %>%
+    paste0(d.out, "/", .) %>% 
+    write.table(paired.result, file = .,sep = " ", quote = F, na = "NA", row.names = F, col.names = F)
+
+  return(l)
+  }
+```
+
+# Combine, write data and calculate lambda for each test
+```{r}
+registerDoParallel(8)
+estimates <- foreach(i=1:nrow(pairs), .combine = rbind) %dopar% {
+  write2meta.and.lambda(i)
+}
+```
+
+# Write indexes and estimates
+
+```{r}
+paste0(d.out, "/", "meta.indices.rds") %>% 
+  saveRDS(pairs, .)
+
+paste0(d.out, "/", "lambda.estimates.tsv") %>% 
+  write_tsv(estimates, .)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

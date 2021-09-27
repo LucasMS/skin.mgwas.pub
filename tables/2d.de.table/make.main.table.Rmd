@@ -1,0 +1,154 @@
+---
+title: "Get 2D experiment table"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(kableExtra)
+library(scales)
+```
+
+## Import data
+```{r}
+de <- "/home/lsilva/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/3.overview/DE.results.rds" %>% 
+  readRDS()
+library(scales)
+```
+
+```{r}
+de <- de %>% 
+  arrange(padj) %>% 
+  filter(GWAS == "yes") %>% 
+  mutate(description = ifelse(is.na(description), 
+                              "-",
+                              description),
+         gene_biotype = ifelse(is.na(gene_biotype), 
+                               "-",
+                               gene_biotype),
+         baseMean = if_else(baseMean < 10,
+                            baseMean %>% round(3) %>% as.character(),
+                            baseMean %>% 
+                              scientific() %>%
+                              gsub("e-", "x10^-",.) %>%
+                              gsub("e+", "x10^",.) %>%
+                              paste0(., "^")),
+         log2FoldChange = if_else(is.na(log2FoldChange),
+                                  "-",
+                                  log2FoldChange %>% 
+                                    round(3) %>%
+                                    as.character()),
+         lfcSE = if_else(is.na(lfcSE),
+                         "-",
+                         lfcSE %>% 
+                           round(3) %>%
+                           as.character()),
+         pvalue = if_else(is.na(pvalue),
+                          "-",
+                          pvalue %>% 
+                            scientific() %>%
+                            gsub("e-", "x10^-",.) %>%
+                            gsub("e+", "x10^",.) %>%
+                            paste0(., "^")),
+         padj = if_else(is.na(padj),
+                        "-",
+                        padj %>% 
+                          scientific() %>%
+                          gsub("e-", "x10^-",.) %>%
+                          gsub("e+", "x10^",.) %>%
+                          paste0(., "^"))) %>% 
+  rename(Ensembl = Gene,
+         Gene = Gene_name,
+         Description = description,
+         Biotype = gene_biotype,
+         `Mean of normalized counts` = baseMean,
+         `Fold change (log<sub>2</sub>)` = log2FoldChange, 
+         `Posterior standard deviation` = lfcSE,
+         `*P* value` = pvalue,
+         `*q* value` = padj) %>% 
+  mutate(Biotype = Biotype %>% 
+           str_replace("_", " ")) %>% 
+  select(Ensembl,
+         Gene, 
+         Description,
+         Biotype, 
+         `Mean of normalized counts`,
+         `Fold change (log<sub>2</sub>)`, 
+         `Posterior standard deviation`, 
+         `*P* value`, 
+         `*q* value`) 
+```
+
+
+
+# Output table
+```{r}
+de %>% 
+  kable(escape = F) %>% 
+  kable_styling()
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

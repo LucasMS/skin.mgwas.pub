@@ -1,0 +1,149 @@
+---
+title: "Summary the results"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      code_folding: hide
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_classic(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r, echo= F, message=F, warning=F}
+library(ggplot2)
+library(tidyverse)
+library(phyloseq)
+library(data.table)
+```
+
+
+## Import data
+```{r}
+d.in <- "/work_ifs/sukmb447/projects/skin.mgwas/results/2.statistical.tests/1.beta.diversity/results/"
+tests <- "/work_ifs/sukmb447/projects/skin.mgwas/results/2.statistical.tests/1.beta.diversity/tests.rds" %>% 
+  readRDS()
+ps <- readRDS("/work_ifs/sukmb447/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rds")
+```
+
+# Get metadata information
+```{r}
+meta <- ps %>% 
+  sample_data() %>% 
+  data.frame() %>% 
+  select(index, Cohort, Site) %>% unique()
+```
+
+## Get n tests
+
+```{r}
+n.tests <- nrow(tests)
+```
+
+# Read all files
+
+```{r, warning=F}
+files <- list.files(path = d.in,
+                    pattern = ".rds") %>%
+  paste0(d.in, "/", .)
+
+#Did everything run?
+identical(nrow(tests), length(files))
+
+# Get results
+res <- list()
+n <- 1 
+for (i in files){
+  # Test id
+  id.test <- str_split(i, "/")[[1]]
+  id.test <- id.test[str_detect(id.test, "index")] %>% 
+    str_split("\\.") 
+  id.test <- id.test[[1]][1] %>%
+    gsub("test",  "", .) 
+  
+  # Get indexes
+  index <- str_split(i, "/")[[1]]
+  index <- index[str_detect(index, "index")] %>% 
+    str_split("\\.") 
+  index <- index[[1]][2] %>%
+    gsub("index",  "", .) 
+  
+  # get results
+  res.internal <- readRDS(i) %>% 
+    mutate(index = index) %>%
+    mutate(id.test = id.test %>% as.numeric()) %>% 
+    # annotate the site and cohort via index
+    left_join(meta, by = "index")
+  
+  # Add them all to final results
+  res[[n]] <- res.internal
+  # clean internal files
+  rm(res.internal)
+  n <- n + 1
+}
+
+```
+
+# Gather them in a data.frame
+
+```{r}
+res.df <- rbindlist(res)
+```
+
+```{r}
+"res.rds" %>% 
+  paste0(d.out, "/", . ) %>% 
+  saveRDS(res.df, .)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

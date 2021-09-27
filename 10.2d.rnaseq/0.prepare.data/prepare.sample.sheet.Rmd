@@ -1,0 +1,150 @@
+---
+title: "Format data that is compatible with nf-core pipeline"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(readxl)
+```
+
+## Import data
+```{r}
+design <- read_xlsx("~/IKMB/projects/skin.mgwas/common.data/invitro.assay/in.vitro.assays.metadata.xlsx") %>% 
+  rename(sample = Sample)
+  
+lib <- read_csv("~/IKMB/projects/skin.mgwas/common.data/invitro.assay/sequencing.results/sample.info.csv") %>% 
+  select(name, external_name) %>% 
+  distinct() %>% 
+  rename(sample = external_name)
+files <- read.delim("~/IKMB/projects/skin.mgwas/common.data/invitro.assay/sequencing.results/files.txt", header = F, stringsAsFactors = F) %>%
+  magrittr::set_colnames("file") 
+```
+
+# Format file list
+
+```{r}
+r1 <- files %>% 
+  separate(file, into = c("name"), sep ="-", remove = F) %>% 
+  filter(str_detect(file, "_R1")) %>% 
+  rename( fastq_1 = file)
+r2 <- files %>% 
+  separate(file, into = c("name"), sep ="-", remove = F) %>% 
+  filter(str_detect(file, "_R2")) %>% 
+  rename( fastq_2 = file)
+
+files <- full_join(r1, r2)
+rm(r1, r2)
+```
+
+# Combine data
+
+```{r}
+df <- full_join(lib, files) %>% 
+  full_join(design) %>% 
+   mutate(strandedness = "reverse") %>% # Single-end TruSeq stranded Kits are reverse. Source: https://github.com/igordot/genomics/blob/master/notes/rna-seq-strand.md and https://chipster.csc.fi/manual/library-type-summary.html
+  select(sample, fastq_1, fastq_2, strandedness, everything())
+```
+
+# Add location to the sequence 
+
+
+```{r}
+location = "/work_ifs/sukmb447/raw.sequencing.data/skin.mgwas.2d.invitro/"
+df <- df %>% 
+  mutate(fastq_1 = paste0(location, fastq_1)) %>% 
+  mutate(fastq_2 = paste0(location, fastq_2)) 
+```
+
+# Make groups and replicates
+```{r}
+df <- df %>% 
+  mutate(group = paste0(Condition, "_",Colonization) %>% 
+           str_remove("S. "),
+         replicate = Replicate) %>% 
+  select(group, replicate, fastq_1, fastq_2, strandedness, everything())
+```
+
+
+# Write outputs
+
+```{r}
+paste0(d.out, "/", "rna.sample.sheet.csv") %>% 
+  write.csv(df,., quote = F, row.names = F)
+```
+
+
+# Conclusion
+
+# Session information
+
+```{r}
+sessionInfo()
+```

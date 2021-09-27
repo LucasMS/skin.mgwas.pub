@@ -1,0 +1,310 @@
+---
+title: "Plot expressions"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png", 'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+library(ggthemes)
+theme_set(theme_few(base_size = 17))
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(ggplotify)
+library(pheatmap)
+library(viridis) # color
+library(ggrepel)
+library(patchwork)
+```
+
+## Import data
+```{r}
+total_expression <- read_tsv("/home/lsilva/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/gene.annotation.tsv")
+sc_cluster <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/7.sc.transcription/gene.clusters.annotation.rds")
+gene_exprs <- "/home/lsilva/IKMB/projects/skin.mgwas/results/7.sc.transcription/gene_exprs.to.plot.rds" %>% 
+  readRDS()
+invitro <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/3.overview/DE.results.rds")
+counts <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/3.overview/count.data.rds")
+```
+
+
+
+# Plots
+
+## Single-cell clusters
+
+```{r}
+to_plot <- sc_cluster %>%
+  filter(file == "supplementary.data.1") %>% 
+  select(gene, avg_logFC, annotation, cluster) %>%
+  #Average by cell type
+  group_by(gene, annotation) %>% 
+  summarise(avg_logFC = mean(avg_logFC)) %>% 
+  spread(key = gene, value = avg_logFC) %>% 
+  column_to_rownames("annotation")
+
+to_plot[is.na(to_plot)] <- 0
+
+p_sc <- pheatmap(to_plot, 
+                 na_col = "grey",
+                 legend = T, 
+                 color = cividis(10), 
+                 fontsize = 14,
+                 angle_col = 45) %>% 
+  as.grob()
+
+p_sc %>% plot()
+```
+
+## Total tissue
+
+```{r}
+p_total <- total_expression %>% 
+  filter(!is.na(NX)) %>% 
+  #top_n(8) %>% 
+  ggplot(aes(x = fct_reorder(gene.name, desc(NX)), y = NX)) +
+  geom_col() +
+  ggpubr::rotate_x_text() +
+  labs(x = NULL, y = "Normalised\nexpression\nin skin") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+p_total
+```
+
+## Single-cell averages
+```{r}
+# Set parameters
+
+gene_levels <- total_expression %>% 
+  filter(!is.na(NX)) %>% 
+  mutate(levels = fct_reorder(gene.name, desc(NX)) %>% 
+           levels()) %>% 
+  pull(levels) %>% 
+  unique()
+
+# Add cluster info
+gene_exprs <- sc_cluster %>% 
+  mutate(color = "grey") %>% 
+  mutate(broadcell = annotation,
+         gene_name = gene) %>% 
+  select(gene_name, broadcell, color) %>% 
+  distinct() %>% 
+  right_join(gene_exprs, by = c("gene_name", "broadcell")) %>% 
+  mutate(gene_name = factor(gene_name, levels = gene_levels))
+
+p_exprs <- gene_exprs %>% 
+  ggplot(aes(gene_name, broadcell)) +
+  geom_tile(fill = gene_exprs$color) + 
+  geom_point(aes(fill = avg_log_exprs, size = percent_cells), shape=21, color="black") +
+  scale_fill_distiller(
+    palette = 'Reds',
+    direction = 1,
+    name = 'Normalised\nexpression',
+    guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")
+  ) +
+  labs(y = 'Cell type', color = 'Expression', x = 'Gene', size = "Cells (%)") +
+  ggpubr::rotate_x_text(45)
+p_exprs
+```
+
+# Make top plot
+
+```{r, fig.width = 13, fig.height = 7}
+p_top <- (p_total / p_exprs) +
+  plot_layout(heights = c(1.2, 3.8))
+p_top
+```
+
+# Make expression of interest genes by keratinocytes
+
+
+# Edit invitro
+
+```{r}
+invitro <- invitro %>% 
+  mutate(significant = if_else(padj < 0.05,
+                               "Yes", 
+                               "No"),
+         significant = if_else(is.na(padj),
+                                "No",
+                                significant),
+         log2FoldChange = if_else(is.na(log2FoldChange),
+                                0,
+                                log2FoldChange),
+         lfcSE = if_else(is.na(lfcSE),
+                                0,
+                                lfcSE))
+```
+
+```{r}
+selected_genes <- invitro %>% 
+  filter(GWAS == "yes") %>%
+  ggplot(aes(fct_reorder(Gene_name, log2FoldChange), log2FoldChange, label = Gene_name)) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  ggpubr::rotate_x_text() + 
+  geom_errorbar(aes(ymin=log2FoldChange-lfcSE, ymax=log2FoldChange+lfcSE), width=.2,
+                 position=position_dodge(.9)) +
+  geom_point(aes(color = significant, size = baseMean)) +
+  scale_color_manual(values=c("#999999", "#E69F00")) +
+  labs(size = "Mean of\nnormalized\ncounts",
+       y = "Effect size",
+       color = "Significant",
+       x = "Gene")
+selected_genes
+```
+
+
+# Make Alternative bottom plot
+
+## Make 2D invitro expression results
+
+```{r}
+p_invitro <- invitro %>% 
+  ggplot(aes(baseMean, log2FoldChange, label = Gene_name)) + 
+  geom_point(aes(color = significant), alpha = 0.3) +
+  geom_point(data = invitro %>% 
+               filter(GWAS == "yes",
+                      significant == "Yes"),
+             fill = "#E69F00", 
+             alpha = 1, 
+             size = 4,
+             shape = 21,
+             colour = "black") +
+  ## Name Gwas signficant
+  geom_label_repel(data = invitro %>% 
+                     filter(GWAS == "yes",
+                            significant == "Yes"), 
+                   point.padding=unit(1,'lines'),
+                   hjust = 0.5, # align
+                   direction = "y",
+                   max.iter = 1e4,
+                   force_pull = 0,
+                   #Add some line aesthetics
+                   segment.curvature = -1e-20, # add a slight curve
+                   segment.color = "black",
+                   segment.linetype = 4,
+                   min.segment.length = 0,
+                   # Limit area of labels
+                   ylim = c(-Inf, Inf),
+                   xlim = c(4.5, Inf)) +
+  theme(legend.position = "bottom") +
+  ggpubr::rotate_x_text() +
+  scale_x_log10() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  scale_color_manual(values=c("#999999", "#E69F00")) +
+  labs(x = "Mean of normalized  counts", y = bquote("Effect size"~(log[2]~"fold change")), color = "Significant")
+p_invitro
+```
+
+## Plot tops
+
+```{r}
+selected <- bind_rows(data.frame(Gene_name = invitro %>% 
+                                   filter(significant == "Yes") %>% 
+                                   top_n(10, -(log2FoldChange)) %>% 
+                                   pull(Gene_name), 
+                                 type = "Top down"),
+                      
+                      data.frame(Gene_name = invitro %>% 
+                                   filter(significant == "Yes") %>% 
+                                   top_n(10, log2FoldChange) %>% 
+                                   pull(Gene_name), 
+                                 type = "Top up"))
+p_invitro_top <- counts %>% 
+  mutate(Colonization = str_replace(Colonization, "S. epidermidis", "Staphylococcus\nepidermidis")) %>% 
+  filter(Condition  == "Control",
+         Colonization %in% c("Control", "Staphylococcus\nepidermidis"),
+         Gene_name %in% selected$Gene_name) %>% 
+  full_join(selected, by = "Gene_name") %>% 
+  mutate(type = factor(type, 
+                       levels = c("Top up", "Top down" )),
+         Replicate = as.character(Replicate)) %>% 
+  ggplot(aes(Replicate, Gene_name)) +
+  geom_tile(aes(fill = count)) +
+  facet_grid(type ~ Colonization,  scales = "free", space = "free", drop = T) +
+  labs(fill = "Transformed\ncounts (VST)", y = "Gene", x = "Replicate") +
+  theme(legend.position = "bottom"#,
+        #strip.text.x = element_text(angle = 0)
+        ) 
+p_invitro_top
+```
+
+
+# Make bottom
+
+```{r, fig.width = 13, fig.height = 7}
+p_bottom <- ggpubr::ggarrange(p_invitro, p_invitro_top, labels = c("b", "c"), heights = c(1, 1))
+p_bottom
+```
+
+
+# Make final plot
+
+```{r, fig.width = 13, fig.height = 11}
+ggpubr::ggarrange(p_top, selected_genes, labels = c("a", "b"), nrow = 2, heights = c(8,5))
+```
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

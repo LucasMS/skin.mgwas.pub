@@ -1,0 +1,487 @@
+---
+title: "Join annotation and have an overview"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+Here I have to format data from different source (fine mapping, GETex, Human protein atlas, gene annotation) and combine them in two manners, by lead snp and by snps.
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(biomaRt)
+library(ggplot2)
+library(tidyverse)
+library(readODS)
+library(data.table)
+
+```
+
+## Import data
+```{r}
+meta <- "~/IKMB/projects/skin.mgwas/results/3.meta.analysis/1.microenv/3.beta.taxfeatures/meta.all.rds" %>% 
+  readRDS()
+all.proteins <- "~/IKMB/projects/skin.mgwas/common.data/human.proteome/proteinatlas.tsv" %>% 
+  read_tsv()
+
+skin.expression <- "~/IKMB/projects/skin.mgwas/common.data/human.proteome/rna_consensus.tsv" %>% 
+  read_tsv()
+
+egenes <- "~/IKMB/projects/skin.mgwas/common.data/gtex.mapping/gtex.mapping.final_data_20210611.csv" %>% 
+  read.delim(sep = ',') %>% 
+  unique()
+
+#Load annotations of genes and variants
+d.in <- "~/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/genes.snps/"
+snps.files <- list.files(d.in, pattern = ".snps.tsv")
+genes.files <- list.files(d.in, pattern = ".genes.tsv")
+
+# Load allele frequencies
+# Optimize with fread
+afq <- fread("~/IKMB/projects/skin.mgwas/results/1.data.harmonization/2.genotype/PopGen_and_KORA.harmonized.all.MAF.frqx") %>% 
+  magrittr::set_colnames(make.names(colnames(.)))
+```
+
+# GTex 
+
+## Format GTex results
+
+```{r}
+egenes <- egenes %>% 
+  mutate(refsnp_id = refsnp_id_gene_1) %>% 
+  #Get permanent ensemble IDs
+  mutate(gene_id_hg_38_gene_2 = gsub("\\.[0-9]*$", "", gene_id_hg_38_gene_2))
+```
+
+### Annotate gene names
+
+```{r}
+gene_mart <- useEnsembl(biomart = "ensembl", 
+                        dataset = "hsapiens_gene_ensembl")
+
+egenes.annotation <- getBM(attributes = c("ensembl_gene_id",
+                                           "external_gene_name"), 
+                            filters = 'ensembl_gene_id', 
+                            values = egenes %>%
+                              pull(gene_id_hg_38_gene_2) %>% 
+                              unique(), 
+                            mart = gene_mart)
+```
+
+### Add annotation
+
+```{r}
+egenes <- egenes %>% 
+  left_join(egenes.annotation,
+            by = c("gene_id_hg_38_gene_2" = "ensembl_gene_id")) %>% 
+  rename("egene.id" = "gene_id_hg_38_gene_2") %>% 
+  rename("egene.name" = "external_gene_name") %>% 
+  filter(!is.na(egene.id)) %>% 
+  mutate(egene.name = if_else(egene.name == "", egene.id, egene.name)) %>% 
+  select(refsnp_id, egene.id, egene.name) %>% 
+  unique() %>% 
+  #Summarize by position
+  group_by(refsnp_id) %>% 
+  summarise(egene.id = paste(egene.id, collapse = ","),
+            egene.name = paste(egene.name, collapse = ","))
+```
+
+## Save formatted egenes
+
+```{r}
+write.table(egenes, paste0(d.out,
+                           "/", 
+                           "formatted.egenes.tsv"),
+            quote = T, 
+            sep = "\t", 
+            row.names = F)
+
+```
+
+# Calculate EAF
+Effector allele is A2 (aka B)
+
+```{r}
+afq <- afq %>% 
+  mutate(total = C.HOM.A1. + 
+           C.HET.+
+           C.HOM.A2.) %>% 
+  mutate(EAF = ((C.HOM.A2. * 2) + C.HET.) / (total *2)) %>% 
+  mutate(MAF = if_else(EAF >= 0.5,
+                       ((C.HOM.A1. * 2) + C.HET.) / (total *2),
+                       EAF)) %>% 
+  mutate(Major.allele = case_when(EAF > 0.5 ~ A2,
+                                  EAF < 0.5 ~ A1,
+                                  EAF == 0.5 ~ paste0(A1, "/", A2))) %>% 
+  mutate(Effector.allele = A2,
+         Other.allele = A1) %>% 
+  rename("snp.name" = "SNP",
+          "Population.allele" = "total") %>% 
+  select(snp.name, 
+         EAF,
+         MAF, 
+         Major.allele,
+         Effector.allele,
+         Other.allele,
+         Population.allele) %>% 
+  # Retrieve position and chr
+  separate(snp.name, c("chr_name", "position"), sep = ":", remove = F) %>% 
+  mutate(position = position %>% as.numeric(),
+         chr_name = chr_name %>% as.numeric())
+```
+
+
+# Get results of finemapping annotation
+## Genes
+```{r}
+genes <- NULL
+for (i in genes.files){
+  gene.in <- read.delim(paste0(d.in, i))
+  genes <- bind_rows(genes, gene.in)
+}
+genes <- genes %>% 
+  rename("gene.id" = "ensembl_gene_id") %>% 
+  rename("gene.name" = "external_gene_name") %>% 
+  filter(!is.na(gene.id)) %>% 
+  mutate(gene.name = if_else(gene.name == "", gene.id, gene.name))
+
+# genes.by.test
+meta.id.genes <- genes %>% 
+  group_by(meta.id, round.index, type, metanalysis) %>% 
+  summarise(genes = paste(gene.name, collapse = ","),
+            gene.id = paste(gene.id, collapse = ",")) %>%
+  #remove trailing ,
+  mutate(genes = gsub(",$", "", genes)) %>% 
+  #remove trailing ,
+  mutate(gene.id = gsub(",$", "", gene.id)) 
+
+genes <- genes %>% 
+  select(-round.index, -meta.id, -type, -metanalysis) %>% 
+  unique()
+```
+
+## Snps
+
+```{r}
+snps <- NULL
+for (i in snps.files){
+  snp.in <- read.delim(paste0(d.in, i))
+  snps <- bind_rows(snps, snp.in)
+} # SNP data should be added here, to save it, also add more information for supplementary info
+
+# Add snp Full cohort information
+snps <- snps %>% 
+  left_join(afq, by = c("position", "chr_name")) %>% 
+  # some clean up
+  select(-c(chrom_start,
+            chrom_end,
+            allele_1,
+            minor_allele,
+            chromosomal_region,
+            start, 
+            end,
+            clinical_significance,
+            synonym_name, 
+            consequence_type_tv, 
+            synonym_name))
+```
+
+### Get gene names of SNPS
+
+```{r}
+# Check is there is one gene annotation per rsID/snp.name
+0 == snps %>% 
+  select(snp.name, ensembl_gene_stable_id) %>% 
+  unique() %>% 
+  pull(snp.name) %>% 
+  duplicated() %>% 
+  sum()
+
+# Get genes and snp ids
+snp.gene <- snps %>% 
+  select(snp.name, round.index, ensembl_gene_stable_id) %>%
+  rename(gene.id = ensembl_gene_stable_id) %>% 
+  filter(!is.na(gene.id) & gene.id != "") %>% 
+  mutate(gene.name = NA)
+
+for (i in 1:nrow(snp.gene)){
+  snp.gene[i,"gene.name"] <-
+    str_split(snp.gene[i,"gene.id"], ";")[[1]] %>% 
+    data.frame(gene.id = .) %>% 
+    left_join(genes, by = "gene.id") %>% 
+    pull(gene.name) %>% 
+    paste(collapse = ",")
+}
+
+# Remove trailling , --> case of gene ids without name
+snp.gene <- snp.gene %>% 
+  mutate(gene.name = str_remove(gene.name, ",$"))
+
+snps <- snps %>% 
+  left_join(snp.gene, by = c("round.index", "snp.name")) %>% 
+  select(-ensembl_gene_stable_id)
+```
+
+
+## Add GTex annotation
+```{r}
+snps <- snps %>% 
+  left_join(egenes, by = "refsnp_id")
+```
+
+## Make meta.id.egenes
+
+```{r}
+meta.id.egenes <- snps %>% 
+  group_by(meta.id, round.index, type, metanalysis) %>% 
+  summarise(egene.name = paste(egene.name, collapse = ","),
+            egene.id = paste(egene.id, collapse = ","))
+
+for (i in 1:nrow(meta.id.egenes)){
+meta.id.egenes[i,"egene.id"] <- meta.id.egenes[i,"egene.id"] %>% 
+  str_split(.,",|;") %>% 
+  .[[1]] %>% 
+  unique() %>% 
+  .[. != "NA"] %>% 
+  paste(collapse = ",")
+
+meta.id.egenes[i,"egene.name"] <- meta.id.egenes[i,"egene.name"] %>% 
+  str_split(.,",|;") %>% 
+  .[[1]] %>% 
+  unique() %>% 
+  .[. != "NA"] %>% 
+  paste(collapse = ",")
+}
+```
+
+
+## Write all snps
+
+```{r}
+write.table(snps, paste0(d.out, "/", "all.snps.from.mapping.tsv") , quote = T, sep = "\t", row.names = F)
+```
+
+
+## Get data for lead snps
+```{r}
+snps.lead <- snps %>% 
+  filter(Lead == "yes") %>% 
+  select(-P.value, -rsquare, -gene.id, -gene.name, -egene.id, -egene.name) %>% 
+  # add genes
+  left_join(meta.id.genes, by = c("meta.id", "round.index", "type", "metanalysis")) %>% 
+  # add egenes
+  left_join(meta.id.egenes, by = c("meta.id", "round.index", "type", "metanalysis"))
+  
+```
+
+# Meta-analysis data
+
+## Format
+```{r}
+# Edit meta results, keep only the the lead snps
+meta <- meta %>% 
+  mutate(A = A.index1,
+         B = B.index1) %>% 
+  select(meta.id,
+         snp.name, 
+         chr, 
+         position,
+         A,
+         B, 
+         tax,
+         P.meta,
+         name, 
+         cluster.member,
+         level,
+         microenv,
+         metanalysis,
+         type,
+         P.index1, 
+         P.index2, 
+         Beta.index1,
+         Beta.index2,
+         StdErr.index1,
+         StdErr.index2, 
+         n.index1,
+         n.index2, 
+         BETA_FE, STD_FE) %>% 
+  mutate(lead = paste0(chr, ":", position)) %>% 
+  mutate(meta.id = meta.id %>% as.numeric()) %>%
+  unique() %>% 
+  group_by(meta.id, type, metanalysis, chr) %>% 
+  arrange(P.meta) %>% 
+  slice(which.min(P.meta)) %>% 
+  select(-lead)
+```
+
+
+
+# Combine all data
+```{r}
+comb <- snps.lead %>% 
+  right_join(meta, by = c("chr_name" = "chr", "position", "meta.id", "type", "metanalysis", "snp.name")) %>% 
+  rename("chr" = "chr_name" ) %>% 
+  rename("rsID" = "refsnp_id")
+```
+
+# Add gtex gene expression info
+
+# Arrange
+
+```{r}
+comb <- comb %>% 
+  select(microenv, 
+         snp.name, 
+         genes, 
+         name, 
+         quality,
+         type,
+         metanalysis, 
+         P.meta, 
+         cluster.member, 
+         everything()) %>% 
+  arrange(chr, position)
+```
+
+# Write output
+
+```{r}
+write.table(comb, paste0(d.out, "/", "lead.snp.bacteria.all.tsv"),
+            quote = T, 
+            sep = "\t",
+            row.names = F)
+```
+
+#  Genes and egenes
+
+
+# Annotate all genes
+
+## Combine genes and egenes
+```{r}
+all.genes <- bind_rows(genes %>% select(gene.id), 
+                       egenes.annotation %>% 
+                         mutate(gene.id = ensembl_gene_id) %>% 
+                         select(gene.id)) %>% 
+  unique()
+```
+
+## Annotate them
+
+```{r}
+all.genes <- getBM(attributes = c("ensembl_gene_id",
+                               "external_gene_name",
+                               "description",
+                               "gene_biotype",
+                               "chromosome_name", 
+                               "band",
+                               "start_position",
+                               "end_position"), 
+                filters = 'ensembl_gene_id', 
+                values = all.genes$gene.id, 
+                mart = gene_mart) %>% 
+  separate(description, c("description"), sep = " \\[" ) %>% 
+  arrange(ensembl_gene_id) %>% 
+  rename("gene.id" = "ensembl_gene_id") %>% 
+  rename("gene.name" = "external_gene_name")
+```
+
+## Add human protein atlas
+
+### Edit atlas proteins files
+
+```{r}
+all.proteins <- all.proteins %>% 
+  rename("gene.id" = "Ensembl") %>% 
+  select(gene.id, Uniprot, `Protein class`,`Biological process`, `Molecular function`, `Subcellular main location`)
+```
+
+### Edit consensus RNA expression 
+```{r}
+skin.expression <- skin.expression %>% 
+  filter(Tissue == "skin") %>% 
+  rename("gene.id" = "Gene") %>% 
+  select(gene.id, NX)
+```
+
+
+### Add
+```{r}
+all.genes <- all.genes %>% 
+  left_join(all.proteins, by = "gene.id") %>% 
+  left_join(skin.expression, by = "gene.id") %>% 
+  mutate(gene.name = if_else(gene.name == "", gene.id, gene.name))
+```
+
+## Write
+```{r}
+write.table(all.genes,  paste0(d.out, "/", "gene.annotation.tsv"), sep = "\t", row.names = F, col.names = T, quote = F)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,102 @@
+---
+title: "Prepare data for tests in the cluster"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+I will prepare data for paralellel tests inthe cluster
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+```
+
+
+
+# Parameters to test
+
+```{r}
+chromossome = 1:22
+index = 1:6
+ncore = 8
+```
+
+# Make parameters
+
+```{r}
+tests <- expand.grid(chromossome,
+                     index,
+                     stringsAsFactors = F) %>% 
+  set_names(c("chromossome", "index")) %>% 
+  mutate(test.id = 1:n(),
+         ncore := ncore)
+```
+
+
+
+# Save all dataset
+
+```{r}
+"tests.rds" %>% 
+  paste0(d.out, "/", .) %>% 
+  saveRDS(tests, .)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

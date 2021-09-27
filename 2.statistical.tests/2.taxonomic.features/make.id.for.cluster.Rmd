@@ -1,0 +1,360 @@
+---
+title: "Prepare data for tests in the cluster"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+I will prepare data for paralellel tests inthe cluster
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(phyloseq)
+library(doParallel)
+library(apcluster)
+```
+
+#Load 
+
+```{r}
+d.in <- "~/IKMB/projects/skin.mgwas/results/2.statistical.tests/2.taxonomic.features/microbiome.data/"
+ps.r <- readRDS("~/IKMB/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rarefied.rds")
+```
+
+
+# Parameters to test
+
+```{r}
+index = 1:6
+ncore = 8
+levels = c("Phylum" , "Class"  , "Order" ,  "Family" , "Genus" ,  "Species", "ASV")
+```
+# Select features that are present in both sites of each microenvironment
+
+## Extract features from each site-cohort
+```{r}
+tests <- NULL
+for (i in index){
+  ps <- paste0(d.in,"index", i, ".ps.rds" ) %>% 
+    readRDS()
+  meta <- ps %>% 
+    sample_data() %>% 
+    data.frame() %>%
+    select(Site, Cohort, index, microenv) %>%
+    unique()
+  tax.table <- tax_table(ps)@.Data %>% data.frame()
+  for (z in levels){
+    in.df <- data.frame(level = z,
+                        tax = tax.table %>%
+                          pull(z) %>%
+                          as.character() %>% 
+                          unique(),
+                        meta)
+    tests <- bind_rows(tests, in.df)
+    rm(in.df)
+  }
+  
+}
+```
+
+## Select
+
+```{r}
+nrow(tests)
+tests <- tests %>% 
+  group_by(level, tax, microenv) %>% 
+  mutate(n = n()) %>% 
+  filter(n == 2) %>% 
+  ungroup()
+nrow(tests)
+```
+
+
+# Select features based on their presence/abundance and median abundance
+
+## Get stats
+
+```{r}
+tests <- data.frame(tests, median = NA, presence = NA)
+
+ps.list <- list()
+for (i in index){
+  ps.list[[i]]<- paste0(d.in,"index", i, ".ps.rds" ) %>% 
+    readRDS()
+  names(ps.list)[i] <- i
+}
+
+# Do
+
+for (i in 1:nrow(tests)){
+  index.i <- tests[i,] %>% pull(index) %>% as.character()
+  ps.i <- ps.list[[index.i]]
+  level.i = tests[i,] %>% pull(level) %>% as.character()
+  tax.i = tests[i,] %>% pull(tax) %>% as.character()
+  
+  # Get taxa info
+  e <- paste0(level.i, "==", "'",tax.i, "'")
+  tax.data <- ps.i %>% tax_glom(level.i) %>% subset_taxa(eval(parse(text = e)))
+  feature.tax <- otu_table(tax.data)@.Data
+  # Get taxa information
+  m <- median(feature.tax[feature.tax>0])
+  p <- sum(feature.tax > 0) 
+  
+  # save results
+  tests[i,"median"] <- m
+  tests[i,"presence"] <- p
+}
+```
+
+## Visualize results
+
+```{r}
+ggplot(tests, aes(presence, median)) +
+  geom_point(aes(color = level)) +
+  facet_wrap(~ Cohort + Site) +
+  scale_y_log10() +
+  geom_hline(yintercept = 50, linetype = "dashed") +
+  geom_vline(xintercept = 100, linetype = "dashed")
+```
+
+## Filter
+
+```{r}
+tests <- tests %>% 
+  mutate(n = NA) %>% 
+  filter(median > 50, presence > 100) %>% 
+  group_by(level, tax, microenv) %>% 
+  mutate(n = n()) %>% 
+  filter(n == 2) %>% 
+  ungroup()
+```
+
+
+
+## Stats: Summarize features
+```{r}
+s <- tests %>% select(level,tax) %>% unique() %>% group_by(level) %>% count(level)
+#tota
+sum(s$n)
+s
+
+tests %>% group_by(level, tax) %>% summarize(n = n()) %>% 
+  count(n) %>% 
+  ggplot(aes(x = n, y = nn)) +
+  geom_col(aes(fill = level)) +
+  facet_wrap(~ level) +
+  theme(legend.position = "none")+
+  labs(x = "Sites", y = "Counts")
+```
+# Cluster microenvironment-wide samples considering their similar non-truncated distribution
+
+```{r}
+cluster.features <- function (env, similarity.cutoff){
+  #Isolate features to correlate
+  tests.env <- tests %>% filter(microenv == env) %>% 
+    select(level, tax) %>% 
+    unique() %>% 
+    mutate(name = paste(level, tax, sep = "_") %>% make.names(unique = T))
+  
+  # Filter rarefied phyloseq file
+  samdata <- sample_data(ps.r) %>% data.frame()
+  to.filter <- samdata$microenv == env
+  ps.r.e <- ps.r %>% prune_samples(to.filter, .)
+  identical(sample_data(ps.r.e) %>% data.frame() %>% pull(microenv) %>% unique, env) %>% 
+    print()
+  nsamples(ps.r.e) %>% print()
+  
+  # Get abundances of features
+  print(paste("gathering data for", env))
+  
+  df <- data.frame(dummy = rep(1, nsamples(ps.r.e)))
+  
+  for (i in 1:nrow(tests.env)){
+    # get variables
+    level.i = tests.env[i,] %>% pull(level) %>% as.character()
+    tax.i = tests.env[i,] %>% pull(tax) %>% as.character()
+    name.i = tests.env[i,] %>% pull(name) %>% as.character()
+        
+    # Get taxa info - Have to do a workournd subset_taxa because it is bugging withing the function
+    ps.r.e.i <- ps.r.e %>% tax_glom(level.i) 
+    otu.i <- otu_table(ps.r.e.i)@.Data %>% data.frame()
+    taxdata.i <- tax_table(ps.r.e.i)@.Data %>% data.frame()
+    to.filter <- rownames(taxdata.i)[taxdata.i[,level.i] == tax.i] 
+    feature.tax <- otu.i[, to.filter] %>% data.frame()
+    colnames(feature.tax) <- name.i
+    #gather results
+    df <- cbind(df, feature.tax)
+  }
+  
+  # Cluster using average
+  df <- df %>% data.frame() %>% select(-dummy)
+  
+  dm <- 1- corSimMat(t(df), sel=NA, r=1, signed=F, method="spearman")
+  
+  hc <- hclust(as.dist(dm), method = "average")
+  
+  plot(hc, main = env)
+  abline(h = 1 - similarity.cutoff, lty=2)
+  
+  hc.cut <- cutree(hc, h = 1 - similarity.cutoff) %>% 
+    data.frame(cluster = .) %>% 
+    rownames_to_column("name") %>% 
+    mutate(cluster = paste(env, str_pad(cluster,
+                                        width = 3, 
+                                        side = "left", 
+                                        pad = "0")))
+  # Add annotation
+  hc.cut <- hc.cut %>% left_join(tests.env, by = "name")
+  return(hc.cut)
+}
+```
+
+## Retrieve clustering information
+```{r}
+cutoff = 0.985
+moist.c <- cluster.features(env = "Moist", similarity.cutoff = cutoff) %>% 
+  mutate(microenv = "Moist")
+seb.c <-  cluster.features(env = "Sebaceous", similarity.cutoff = cutoff) %>% 
+  mutate(microenv = "Sebaceous")
+dry.c <-  cluster.features(env = "Dry", similarity.cutoff = cutoff) %>% 
+  mutate(microenv = "Dry")
+```
+## Join data
+
+```{r}
+clusters <- rbind(moist.c, seb.c, dry.c)
+# modify name to human readable
+clusters <- clusters %>% 
+  mutate(name = paste0(str_sub(level,1,1) %>% str_to_lower(), ".", tax))
+```
+
+## Add order of levels
+
+```{r}
+order <- data.frame(level = levels, order = 1:7)
+clusters <- clusters %>% left_join(order, by = "level")
+```
+
+## Get representative
+
+```{r}
+clusters.rep <- clusters %>% group_by(cluster) %>% 
+  filter(order == max(order))
+```
+
+## Get All members of the cluster
+
+```{r}
+clusters.rep$cluster.member <- NA
+for (i in 1:nrow(clusters.rep)){
+  #Get cluster
+  cluster.i <- clusters.rep[i,] %>% pull(cluster) %>% as.character()
+  # Get all members of the cluster
+  members <- clusters %>% filter(cluster == cluster.i) %>% 
+    arrange(order) %>% 
+    pull(name) %>% 
+    paste(collapse = ";")
+  clusters.rep$cluster.member[i] = members
+  rm(members, cluster.i)
+}
+```
+
+# Add information to tests
+
+```{r}
+tests.final <- inner_join(tests, clusters.rep, by = c("level", "tax", "microenv"))
+```
+
+## Stats: Summarize features
+```{r}
+s <- tests.final %>% select(level,tax) %>% unique() %>% group_by(level) %>% count(level)
+#tota
+sum(s$n)
+s
+
+tests %>% group_by(level, tax) %>% summarize(n = n()) %>% 
+  count(n) %>% 
+  ggplot(aes(x = n, y = nn)) +
+  geom_col(aes(fill = level)) +
+  facet_wrap(~ level) +
+  theme(legend.position = "none")+
+  labs(x = "Sites", y = "Counts")
+```
+
+# Add parameters
+
+```{r}
+tests.final <- tests.final %>% 
+  ungroup %>% 
+  arrange(cluster, Site) %>% 
+  mutate(test.id = 1:n(),
+         ncore := ncore)
+```
+
+
+# Save all dataset
+
+```{r}
+"tests.rds" %>% 
+  paste0(d.out, "/", .) %>% 
+  saveRDS(tests.final, .)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

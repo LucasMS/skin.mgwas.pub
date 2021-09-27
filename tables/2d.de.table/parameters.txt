@@ -1,0 +1,1 @@
+DIROUT="/home/lsilva/IKMB/projects/skin.mgwas/results/tables/2d.de.table"

@@ -1,0 +1,180 @@
+---
+title: "Filter and select KORA microbiome"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(phyloseq)
+```
+
+## Import data
+```{r}
+d.in <- "~/IKMB/projects/skin.mgwas/kora/results/2.combine.metadata.microbiome"
+source("~/IKMB/projects/skin.mgwas/scripts/functions/get.phyloseq.R") #load function to convert my files to phyloseq
+micro <- paste0(d.in, "/", "samples.micro.rds") %>% 
+  readRDS()
+
+meta <- paste0(d.in, "/", "samples.meta.rds") %>% 
+  readRDS()  
+
+tax <- paste0(d.in, "/", "samples.tax.rds") %>% 
+  readRDS()  
+```
+
+
+# Make phyloseq object
+```{r}
+ps <- get.phyloseq(micro, tax, meta)
+rm(micro, meta, tax)
+```
+
+# Remove samples with less than 10 K sequences
+```{r}
+ps
+ps <- ps %>% 
+  prune_samples(sample_sums(.) > 10000,.) 
+ps
+```
+
+# Remove samples based on metadata
+
+## Remove participants with local antibiotic or corticosteroid treatment within 7 days
+
+```{r}
+ps
+ps <- ps %>% 
+  subset_samples(Hyhaottaoystwaosecftp7dImapAbtle.u3pd_04_1 == 0)
+ps
+```
+
+## Remove participants with anormalities when collecting samples
+
+```{r}
+ps
+ps <- ps %>% 
+  subset_samples(is.na(u3pd_08))
+ps
+```
+
+
+## Select confounders
+
+```{r}
+sd <- ps %>% 
+  sample_data() %>% 
+  data.frame() %>% 
+  mutate(Age = Agetothedeadlin.u3talter) %>% 
+  mutate(Sex = gender.u3csex %>% str_to_lower()) %>% 
+  mutate(BMI = BMI.u3tbmi) %>% 
+  mutate(Genotype_ID = zznraxioms4f4.zz_nr_axiom_s4f4) %>% 
+  select(Genotype_ID, Participant_ID, NGS_ID, Site, Age, Sex, BMI)
+rownames(sd) <- sd$NGS_ID
+
+sample_data(ps) <- sd %>% sample_data()
+ps
+rm(sd)
+```
+
+## Keep only complete data
+
+```{r}
+ps
+ps <- ps %>% 
+  subset_samples(., ps %>% 
+                   sample_data() %>% 
+                   complete.cases())
+ps  
+```
+
+
+# Remove empty otus
+
+```{r}
+ps
+ps <- ps %>% 
+  prune_taxa(taxa_sums(.) > 0, .)
+ps
+```
+
+
+# Save
+
+```{r}
+paste0(d.out, "/", "phyloseq.kora.rds") %>% 
+  saveRDS(ps, .)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

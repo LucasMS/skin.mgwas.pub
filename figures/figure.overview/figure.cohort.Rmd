@@ -1,0 +1,216 @@
+---
+title: "Final plot"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               #dev=c("png"),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+library(ggthemes)
+theme_set(theme_few(base_size = 16))
+# Set seed for reproducibility
+set.seed(13)
+
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "black")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(phyloseq)
+library(grid)
+library(gridExtra)
+library(gtable)
+library(ggplot2)
+library(tidyverse)
+library(phyloseq)
+library(reshape2)
+library(ggrepel)
+library(data.table)
+library(gdata)
+```
+
+## Import data
+```{r}
+# Cohorts
+plot_cohort_age <- "/home/lsilva/IKMB/projects/skin.mgwas/results/6.cohort.description/plot_cohort_age.rds" %>%  readRDS()
+plot_cohort_BMI <- "/home/lsilva/IKMB/projects/skin.mgwas/results/6.cohort.description/plot_cohort_BMI.rds" %>% readRDS()
+plot_cohort_sex <- "/home/lsilva/IKMB/projects/skin.mgwas/results/6.cohort.description/plot_cohort_sex.rds" %>% readRDS()
+
+# Microbiome
+to.plot.beta <- "/home/lsilva/IKMB/projects/skin.mgwas/results/6.cohort.description/to.plot.beta.rds" %>% readRDS()
+var.explained <- "/home/lsilva/IKMB/projects/skin.mgwas/results/6.cohort.description/var.explained.rds" %>% readRDS()
+```
+
+# Make plot cohort
+
+## Sex
+```{r}
+pct <- plot_cohort_sex %>%
+  group_by(Cohort) %>%
+  mutate(total = sum(n)) %>% 
+  mutate(pct = (n/total * 100)) %>% 
+  mutate(pct_name = pct %>% round(0) %>% 
+           paste0("%")) %>% 
+  mutate(position = if_else(Cohort == "KORA FF4",
+                            filter(., Sex == "male",
+                                   Cohort == "KORA FF4") %>% 
+                              pull(n),
+                            filter(., Sex == "male",
+                                   Cohort == "PopGen") %>% 
+                              pull(n)))  %>% 
+  mutate(position = if_else(Sex == "male",
+                            position - 30,
+                            position + 30)) %>% 
+  mutate(color = c("white", "white"))
+
+plot_sex <- 
+  plot_cohort_sex %>% 
+  ggplot(aes(x = Cohort, y = n)) +
+  geom_col(aes(fill = Sex)) +
+  labs(y = "Male:Female (n)") +
+  theme(legend.position = "none") +
+  ggpubr::rotate_x_text(45) +
+  scale_fill_manual(values = cbp1[5:6]) +
+  geom_text(data=pct, aes(label = pct_name,
+                          y = position), 
+            size = 4, col = pct$color)
+plot_sex
+```
+
+## BMI
+
+```{r}
+plot_cohort_BMI <- plot_cohort_BMI %>% 
+  ggplot(aes(BMI, label = Cohort)) +
+  geom_histogram(aes(fill = Cohort), color = "grey", alpha = 0.7) +
+  scale_fill_manual(values = cbp1[1:2]) +
+  theme(legend.position = "bottom") +
+  labs(y = "Count")
+plot_cohort_BMI
+```
+
+## Age
+
+```{r}
+plot_cohort_age <- plot_cohort_age %>% 
+  ggplot(aes(Age, label = Cohort)) +
+  geom_histogram(aes(fill = Cohort), color = "grey", alpha = 0.7) +
+  scale_fill_manual(values = cbp1[1:2]) +
+  theme(legend.position = "bottom") +
+  labs(y = "Count")
+plot_cohort_age
+```
+
+
+## Microbiome
+```{r}
+g.pcoa <- to.plot.beta %>% 
+  mutate(Site = Site %>%
+           gsub("Dorsal", "D.",.) %>% 
+           gsub("Antecubital", "A.",.) %>% 
+           gsub("Volar", "V.",.) %>% 
+           gsub("Retroauricular", "R.",.)) %>% 
+  mutate(Site = case_when(Site == "D. forearm" ~ "D. forearm (P)",
+                          Site == "V. forearm" ~ "V. forearm (P)",
+                          Site == "Forehead" ~ "Forehead (P)",
+                          Site == "R. fold" ~ "R. fold (K)",
+                          TRUE ~ Site)) %>% 
+  mutate(Site = factor(Site, levels = c("D. forearm (P)",
+                                        "V. forearm (P)",
+                                        "A. fossa (P)",
+                                        "A. fossa (K)",
+                                        "Forehead (P)",
+                                        "R. fold (K)"))) %>% 
+  ggplot(aes(x = Axis.1, y = Axis.2, group = factor(Site))) +
+  geom_point(aes(color = Site, fill = Site), size = 1.4) +
+  theme(legend.position = "right",
+        #text = element_text(size = 18),
+        #legend.text = element_text(size = 18),
+        #axis.text = element_text(size = 18),
+        legend.margin=margin(-1,0,-1,0),
+        legend.box.margin=margin(-1,0,-1,0)) +
+  labs(x= paste0("Axis 1 (", var.explained[1] %>% round(2), "%)"),
+       y =  paste0("Axis 2 (", var.explained[2] %>% round(2), "%)"))
+
+g.pcoa <- ggExtra::ggMarginal(g.pcoa, type="boxplot", groupFill = TRUE,groupColour = T) 
+g.pcoa
+```
+
+
+## Cohort
+
+
+```{r, fig.width = 13.5}
+age_bmi <- ggpubr::ggarrange(plot_cohort_age, 
+                             plot_cohort_BMI, 
+                             nrow = 2, 
+                             common.legend = T,
+                             legend = "bottom",
+                             labels = c("b", "c"))
+
+plot_cohort <- ggpubr::ggarrange(plot_sex,
+                                 age_bmi,
+                                 g.pcoa, 
+                                 labels = c("a","", "d"), 
+                                 ncol = 3, 
+                                 widths = c(0.5, 1.2, 2.2))
+plot_cohort
+```
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,309 @@
+---
+title: "Get chunks to perform locusZoom"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(data.table)
+```
+
+## Set results directories
+
+I basically have two types of metanalysis, from beta-diversity and taxonomic features.
+
+```{r}
+beta.dir <- "/work_ifs/sukmb447/projects/skin.mgwas/results/3.meta.analysis/1.microenv/1.beta.diversity/2.gather.and.filter/"
+feature.dir <-  "/work_ifs/sukmb447/projects/skin.mgwas/results/3.meta.analysis/1.microenv/2.taxonomic.features/2.gather.and.filter/"
+```
+
+
+## Import data
+```{r}
+meta <- readRDS("/home/sukmb447/isilon/projects/skin.mgwas/results/3.meta.analysis/1.microenv/3.beta.taxfeatures/meta.all.rds")
+```
+
+# Format data to for the finemapping pipeline plot scripts
+
+
+# Get max and min locations per chromossome
+
+# Here I assume that there is one locus per chromosse, this works pretty well with my data. BUt if there is more than one locus per chromossome, it may not work optimally, because it calculates the max and mins based on the extremes
+
+
+```{r}
+meta <- meta %>% 
+  mutate(chr.meta = paste(chr, meta.id, type,metanalysis))
+
+df <- NULL
+chunk <- 0
+for (i in unique(meta$chr.meta)){
+  chunk <- chunk + 1
+  df.in <- meta %>%
+    filter(chr.meta == i) %>% 
+    summarize(chr = unique(chr),
+              st = min(position) - 250000,
+              sp = max(position) + 250000,
+              meta.id = unique(meta.id),
+              type = unique(type),
+              metanalysis = unique(metanalysis),
+              microenv = unique(microenv)) %>% 
+    mutate(chunk = chunk,
+           NSNP = NA,
+           PPA_3 = 1) %>%
+    select(chunk, NSNP, chr, st, sp, PPA_3, meta.id, type, metanalysis, microenv)
+  
+  df <- bind_rows(df, df.in)
+}
+
+```
+
+# Get data
+
+
+```{r}
+paths <- NULL
+for (i in 1:nrow(df)){
+  # File 1: Get boundaris of the locus (olap)
+  df.in <- df[i,]
+  
+  ## format olap
+  olap <- df.in %>% 
+    select(-meta.id, -type, -metanalysis, -microenv) %>% 
+    mutate(chunk = 1)
+  
+  # File 2: Get summary stats
+  
+  ## get parameters - Needed to read the files
+  meta.id.v <- df.in$meta.id
+  type.v <- df.in$type
+  metanalysis.v <- df.in$metanalysis
+  microenv.v <- df.in$microenv
+  chr.i <- df.in$chr
+  
+  meta.i <- meta %>% 
+    filter(meta.id == meta.id.v,
+           type == type.v,
+           metanalysis == metanalysis.v,
+           chr == chr.i,
+           microenv == microenv.v) %>% 
+    select(test.1, test.2, meta.id, type, metanalysis, chr, index.1, index.2, microenv) %>% 
+    unique()
+  
+  ## Read output from metadata
+  ## Depending on which kind of metadata, the output is different
+  
+  if(type.v == "beta"){
+    fin <- paste0(beta.dir,
+                  "gathered.meta",
+                  meta.i$index.1,
+                  meta.i$index.2,
+                  ".tsv.gz") %>% 
+      fread() %>% 
+      mutate(BETA = 0,
+             SE = 0)
+    cnames <- c("chr", "position", "A.index1" , "B.index1", "P.meta", "snp.name", "BETA", "SE")
+  }
+  
+  if(type.v == "feature"){
+    fin <- paste0(feature.dir,
+                  "parsedmeta",
+                  meta.i$meta.id,
+                  ".",
+                  "test", 
+                  meta.i$test.1, 
+                  ".test", 
+                  meta.i$test.2,
+                  ".index",
+                  meta.i$index.1, 
+                  ".index", 
+                  meta.i$index.2,
+                  ".txt.gz" ) %>% 
+      fread()
+    if(microenv.v == "Dry"){ # Dry
+      cnames <- c("chr", "position", "A.index1" , "B.index1", "P.meta", "snp.name", "Beta.index2", "StdErr.index2")}
+    if(microenv.v != "Dry"){ # Other microenvironments
+      cnames <- c("chr", "position", "A.index1" , "B.index1", "P.meta", "snp.name", "BETA_FE", "STD_FE")}
+  }
+
+  # For finemapping. Columns beta and se are required for fine-mapping. Column maf is needed to output posterior effect size estimates on the allelic scale. All other columns are not required for computations and can be specified arbitrarily.
+  ## Format summary
+  
+  summ <- fin %>% 
+    select(all_of(cnames )) %>% 
+    magrittr::set_colnames(c("CHR", "BP","A1","A2","P","SNP", "BETA", "SE")) %>%
+    filter(CHR == olap$chr,
+           BP >= olap$st*0.95,
+           BP <= olap$sp*1.05) %>% 
+    arrange(CHR, BP)
+  
+  
+  summ <- summ %>% 
+    select(CHR, BP, SNP, A1, A2, P, BETA, SE) %>% 
+    mutate(OR = 0.5,
+           N = 1,
+           CHISQ = 1,
+           Z = 1, 
+           SOURCE	= 1,
+           FRQ_A_A1 = 0.5,
+           FRQ_U_A1	= 0.5,
+           INFO = 1) %>% 
+    select(CHR,
+           BP,
+           SNP,
+           A1,
+           A2,
+           P,
+           OR,
+           BETA,
+           SE,
+           N,
+           CHISQ,
+           Z,
+           SOURCE,
+           FRQ_A_A1,
+           FRQ_U_A1,
+           INFO) 
+    # Remove SNPs with possible NA --> not tested
+  summ <- summ[complete.cases(summ),]
+    
+    
+    # File 3: Get sorted snps
+    snps <- summ %>% 
+    filter(BP >= olap$st, 
+           BP <= olap$sp) %>%
+    pull(SNP) %>% 
+    sort()
+  
+  # Write outputs
+  ## Define location
+  d.out.nested <- paste0(d.out, 
+                         "/", 
+                         i,
+                         ".",
+                         "meta",
+                         meta.id.v,
+                         ".type",
+                         type.v,
+                         ".metanalysis",
+                         metanalysis.v)
+  d.out.nested.input <- paste0(d.out.nested, "/", "input")
+  dir.create(d.out.nested.input, showWarnings = F, recursive = T)
+  ## Write
+  write.table(olap,
+              paste0(d.out.nested.input,
+                     "/",
+                     "chunks.olap"), 
+              quote=F,
+              sep=",", 
+              row.names = F, 
+              col.names = T)
+  write.table(summ, 
+              paste0(d.out.nested.input,
+                     "/",
+                     "summary.tsv"), 
+              quote = F,
+              sep = "\t",
+              row.names = F, 
+              col.names = T)
+  write.table(snps,
+              paste0(d.out.nested.input,
+                     "/",
+                     "snps.sorted"),
+              quote = F,
+              sep = "\t",
+              row.names = F,
+              col.names = F)
+  
+  paths <- c(paths, d.out.nested)
+}
+
+write.table(paths %>% as.data.frame(), 
+            paste0(d.out, "/", "paths.txt"), 
+            quote = F, 
+            sep = "\t",
+            row.names = F,
+            col.names = F)
+
+```
+
+
+
+
+
+
+# Conclusion
+
+# Session information
+
+```{r}
+sessionInfo()
+```

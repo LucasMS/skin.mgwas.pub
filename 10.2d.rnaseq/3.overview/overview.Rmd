@@ -1,0 +1,271 @@
+---
+title: "Overview of the results"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+Visualize the general trends of the data
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+# scale_fill_discrete <- function(...) {
+#   scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r, message=F}
+library(tidyverse)
+library(SummarizedExperiment)
+library(ggrepel)
+library(DESeq2)
+library(fastcluster)
+```
+
+## Import data
+```{r, message=F}
+gwas.genes <- read_tsv("/home/lsilva/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/gene.annotation.tsv") %>% 
+  dplyr::rename(Gene = gene.id) %>% 
+  mutate(GWAS = "yes") %>% 
+  select(Gene, GWAS)
+
+d.in <- "~/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/2.deseq2/"
+se <- paste0(d.in, "summarized.experiment.rds") %>% 
+  readRDS()
+
+files <- list.files(d.in, pattern = "*.all.tsv") %>% 
+  paste0(d.in, .)
+res <- NULL
+for (i in files){
+  res <- bind_rows(res, read_tsv(i))  
+}
+
+```
+
+
+# Any empty result?
+
+```{r}
+setdiff(res %>% pull(index) %>% unique(), metadata(se)$tests$index)
+```
+
+
+# [MA](https://en.wikipedia.org/wiki/MA_plot#:~:text=An%20MA%20plot%20is%20an,visual%20representation%20of%20genomic%20data.&text=Though%20originally%20applied%20in%20the,visualise%20high%2Dthroughput%20sequencing%20analysis.) plots
+
+## Format
+```{r}
+res <- res %>% 
+  mutate(direction = if_else(log2FoldChange > 0,
+                             "Positive",
+                             "Negative")) %>% 
+  mutate(significant = if_else(padj < 0.05,
+                               "yes",
+                               "no"),
+         significant = if_else(is.na(significant),
+                               "no",
+                               significant)) %>% 
+  arrange(index) %>% 
+  data.frame() %>% 
+  left_join(gwas.genes, by = c("Gene")) %>% 
+  mutate(GWAS = if_else(is.na(GWAS),
+                        "no",
+                        GWAS))
+```
+# Get count data tidy
+```{r}
+countdata <- round(assays(se)[["counts"]])
+factors <- colSums(countdata)
+counts <- countdata %>%
+  as.matrix() %>%
+  # Transform data using VST method %>% 
+  vst() %>% 
+  data.frame() %>% 
+  rownames_to_column("Gene") %>% 
+  pivot_longer(!Gene, names_to = "names", values_to = "count") %>% 
+  # Add sample info
+  left_join(colData(se) %>% 
+              data.frame()) %>% 
+  select(Gene, names, count, Replicate, Condition, Colonization) %>% 
+  #Add gene information
+  left_join(res %>% select(Gene, Gene_name, description, band, gene_biotype) %>% 
+              unique())
+```
+
+
+# Save formatted data
+
+## Results
+
+```{r}
+paste0(d.out, "/", "DE.results.rds") %>% 
+  saveRDS(res, .)
+```
+
+## Count data
+```{r}
+paste0(d.out, "/", "count.data.rds") %>% 
+  saveRDS(counts, .)
+```
+
+# Select Gwas genes
+
+```{r}
+res <- res %>% 
+  filter(GWAS == "yes")
+```
+
+
+
+# Plot
+
+```{r, fig.width= 12}
+res %>% 
+  ggplot(aes(fct_reorder(Gene_name, log2FoldChange), log2FoldChange, label = Gene_name)) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  ggpubr::rotate_x_text() + 
+  geom_errorbar(aes(ymin=log2FoldChange-lfcSE, ymax=log2FoldChange+lfcSE), width=.2,
+                 position=position_dodge(.9)) +
+  geom_point(aes(color = significant, size = baseMean)) +
+  scale_color_manual(values=c("#999999", "#E69F00")) +
+  labs(size = "Mean of\nnormalized\ncounts",
+       y = bquote("Fold change " (log[2])),
+       color = "Significance",
+       x = "Gene")
+
+```
+
+
+
+# Example of boxplot
+
+
+```{r, fig.width= 12}
+gene_classification = data.frame(Gene_name = c("C1QBP", "DHX33", "CARD8", "HTT", "CFAP54", "ENSG00000269886", "SRGAP3", "PDGFRA","RGS12", "RAF1" ), 
+                                 Classification = c("Innate immunity",
+                                                    "Innate immunity",
+                                                    "Innate immunity",
+                                                    "Primary cilium",
+                                                    "Primary cilium",
+                                                    "Primary cilium",
+                                                    "Primary cilium", 
+                                                    "Cell fate",
+                                                    "Cell fate",
+                                                    "Cell fate"))
+
+genes <- res %>%  pull(Gene_name) %>% unique()
+
+counts <- counts %>% 
+  left_join(res, by = c("Gene", "Gene_name", "description", "band", "gene_biotype")) %>% 
+  filter(Condition  == "Control",
+         Colonization %in% c("Control", "S. epidermidis"),
+         Gene_name %in% genes) %>% 
+  left_join(gene_classification) %>% 
+  mutate(Classification = if_else(is.na(Classification),
+                                  "Others",
+                                  Classification)) %>% 
+  mutate(Gene_name = factor(Gene_name, 
+                            levels = fct_reorder(Gene_name, baseMean) %>% levels))
+
+```
+
+# 
+```{r, fig.width= 12}
+m.counts <- counts %>% 
+  select(Gene_name, names, count) %>%
+  pivot_wider(names_from = names, values_from = count) %>% 
+  left_join(res) %>% 
+  left_join(gene_classification) %>% 
+  mutate(Classification = if_else(is.na(Classification),
+                                  "Others",
+                                  Classification)) %>%
+  janitor::remove_constant()
+
+rownames(m.counts) <- m.counts$Gene_name
+
+pca_res <- prcomp(m.counts %>% select(starts_with("Cont")), scale. = TRUE)
+library(ggfortify)
+autoplot(pca_res, data = m.counts, colour = "Classification", label = TRUE) 
+
+
+
+m.counts.matrix <- m.counts %>% select(starts_with("Cont"),
+                    Gene_name) %>%
+  column_to_rownames("Gene_name")
+  
+m.counts.matrix <- as.matrix(m.counts.matrix)
+
+pheatmap::pheatmap(m.counts.matrix,cluster_cols = F, scale = "column")
+
+```
+
+
+# Top genes
+```{r}
+
+counts %>% 
+  ggplot(aes(paste(Gene_name, Colonization), count)) +
+  geom_point(aes(col = significant, shape = Colonization, group = Colonization)) +
+  ggpubr::rotate_x_text()
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

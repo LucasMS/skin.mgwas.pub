@@ -1,0 +1,170 @@
+---
+title: ""
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(phyloseq)
+library(ggrepel)
+```
+
+## Import data
+```{r}
+cohort_df <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rds") %>%
+  sample_data() %>%
+  data.frame()
+```
+
+
+# Proccess data to plot Age
+```{r}
+plot_cohort_sex <- 
+  cohort_df %>% 
+  select(Cohort, Genotype_ID, Sex) %>% 
+  distinct() %>% 
+  count(Cohort, Sex)
+```
+
+## Plot Sex
+```{r}
+pct <- plot_cohort_sex %>%
+  group_by(Cohort) %>%
+  mutate(total = sum(n)) %>% 
+  mutate(pct = (n/total * 100)) %>% 
+  mutate(pct_name = pct %>% round(0) %>% 
+           paste0("%")) %>% 
+  mutate(position = if_else(Cohort == "KORA FF4",
+                            filter(., Sex == "male",
+                                   Cohort == "KORA FF4") %>% 
+                            pull(n),
+                            filter(., Sex == "male",
+                                   Cohort == "PopGen") %>% 
+                            pull(n)))  %>% 
+  mutate(position = if_else(Sex == "male",
+                            position - 30,
+                            position + 30)) %>% 
+  mutate(color = c("black", "white"))
+
+plot_cohort <- 
+  plot_cohort_sex %>% 
+  ggplot(aes(x = Cohort, y = n)) +
+  geom_col(aes(fill = Sex)) +
+  labs(y = "Male:\nFemale (n)") +
+  theme(legend.position = "none") +
+  ggpubr::rotate_x_text(45) +
+  scale_fill_manual(values = c("#F0E442", "#0072B2")) +
+  geom_text(data=pct, aes(label = pct_name,
+                          y = position), 
+            size = 4, col = pct$color)
+plot_cohort
+```
+
+# Plot BMI
+
+```{r}
+plot_cohort_BMI <- cohort_df %>% 
+  select(Cohort, Genotype_ID, BMI) %>% 
+  distinct()
+
+plot_cohort_BMI %>% 
+  ggplot(aes(BMI, label = Cohort)) +
+  geom_histogram(aes(fill = Cohort), color = "grey", alpha = 0.7) +
+  scale_fill_manual(values = c("#F0E442", "#0072B2")) +
+  theme(legend.position = "bottom")
+```
+
+# Plot Age
+
+
+```{r}
+plot_cohort_age <- cohort_df %>% 
+  select(Cohort, Genotype_ID, Age) %>% 
+  distinct()
+
+plot_cohort_age %>% 
+  ggplot(aes(Age, label = Cohort)) +
+  geom_histogram(aes(fill = Cohort), color = "grey", alpha = 0.7) +
+  scale_fill_manual(values = c("#F0E442", "#0072B2")) +
+  theme(legend.position = "bottom")
+```
+
+# Save data
+```{r}
+paste0(d.out,"/","plot_cohort_sex.rds") %>% 
+  saveRDS(plot_cohort_sex, .)
+
+paste0(d.out,"/","plot_cohort_BMI.rds") %>% 
+  saveRDS(plot_cohort_BMI, .)
+
+paste0(d.out,"/","plot_cohort_age.rds") %>% 
+  saveRDS(plot_cohort_age,.)
+```
+
+
+## Proccess
+
+# Session information
+
+```{r}
+sessionInfo()
+```
