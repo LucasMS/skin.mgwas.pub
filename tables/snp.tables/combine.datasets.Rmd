@@ -76,7 +76,7 @@ library(tidyverse)
 
 ## Import data
 ```{r}
-meta <- "~/IKMB/projects/skin.mgwas/results/tables/snp.tables/snp.tables/meta.selected.rds" %>% 
+meta <- "~/IKMB/projects/skin.mgwas/results/tables/snp.tables/meta.selected.rds" %>% 
   readRDS() # casual snps and LD > 0.6
 
 snps <- "~/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/all.snps.from.mapping.tsv" %>% 
@@ -86,6 +86,18 @@ lead.snps <- "~/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microen
   read_tsv()
   
 ```
+
+# Remove Species-level results
+
+```{r}
+meta <- meta %>% 
+#remove species from cluster member
+  mutate(cluster.member = cluster.member %>% 
+           str_remove("s\\..+;") %>% 
+           str_remove("s\\..+$"))
+
+```
+
 ## Edit metadata
 
 ```{r}

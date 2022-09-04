@@ -79,7 +79,7 @@ library(tidyverse)
 
 ## Import data
 ```{r}
-d.in <- "~/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/1.analysis/1.analysis"
+d.in <- "~/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/1.analysis"
 d.in.list <- d.in %>% 
   list.dirs(recursive = F)
 ```
@@ -88,7 +88,7 @@ d.in.list <- d.in %>%
 ```{r}
 folder.id <- d.in.list %>% 
   data.frame(d.in = .) %>% 
-  separate(d.in, c(c(1:12) %>% as.character(), "folder"), sep = "/") %>% 
+  separate(d.in, c(c(1:11) %>% as.character(), "folder"), sep = "/") %>% 
   pull(folder) %>% 
   .[str_detect(.,paste0("^",index, ".meta"))]
 
@@ -201,7 +201,7 @@ annotate.snp <- function(x){
                                       sep =":")) %>% 
     right_join(snps, by = c("chr_name", "chromosomal_region"))
   
-  # Filter data. Remove deletions or insertions. These are only considered when no rsID annotation is left after them removal. In this case, I will keep the rsID recovered. This exception is just for 3 out of ~600 variants. These are shown as deletion in biomart but substitution in SNP NCIB. for example, rs152787,rs55736426,rs17100279 
+  # Filter data. Remove deletions or insertions. I did not test them. These are only considered when no rsID annotation is left after them removal. In this case, I will keep the rsID recovered. This exception is just for 3 out of ~600 variants. These are shown as deletion in biomart but substitution in SNP NCIB. for example, rs152787,rs55736426,rs17100279 
   snp.annotation <- list()
   for (i in raw.annotation$chromosomal_region %>% unique){
     snp.raw <- raw.annotation %>% 

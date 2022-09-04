@@ -1,0 +1,182 @@
+---
+title: "Make data for pleotropy analysis"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14)) 
+
+# Set seed for reproducibility
+set.seed(13)
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(phyloseq)
+library(readxl)
+library(Hmisc)
+```
+
+#Function
+```{r}
+lseq <- function(from=1, to=100000, length.out=6) {
+  # logarithmic spaced sequence
+  # origin from library("emdbook"), because need only this
+  exp(seq(log(from), log(to), length.out = length.out))
+}
+```
+
+## Import data
+```{r}
+#Contains information about which taxa/features were tested in which meta.data run (meta.data.id)
+meta.indices <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/3.meta.analysis/1.microenv/2.taxonomic.features/metasoft/1.metaanalysis/prepare/meta.indices.rds")
+
+# Contains information about taxonomy. Useful for annotation of ASVs
+ps <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/1.data.harmonization/3.microbiome.harmonized/phyloseq.rds")
+
+# Contains cluster information of the features, which features are clustered together
+tests <-  readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/2.statistical.tests/2.taxonomic.features/tests.rds")
+
+```
+# Remove species results after Nat Comm reviewer comment
+
+```{r}
+meta.indices <- meta.indices %>% filter(level != "Species")
+tests <- tests %>% filter(level != "Species") %>% 
+  #remove species from cluster member
+  mutate(cluster.member = cluster.member %>% 
+           str_remove("s\\..+;") %>% 
+           str_remove("s\\..+$"))
+```
+
+# Annnotate the exposures
+
+Results are tracked as meta.id
+
+
+## Add taxonomy clusters info
+```{r}
+meta <- tests %>% select(level, tax, microenv, name, cluster.member) %>% unique() %>% 
+  inner_join(meta.indices, by = c("level", "tax", "microenv"))
+```
+
+## Annotate ASV names to the table 
+
+#### Process data
+```{r}
+asv <- tax_table(ps)@.Data %>%
+  data.frame() %>% 
+  select(ASV, Genus, Species) %>% 
+  mutate(Genus.name = Genus) %>% 
+  mutate(Genus = str_sub(Genus, 1, 1) %>% 
+           paste0(., "."),
+         Genus = if_else(str_detect(Species, "(unc.)"),
+                         "",
+                         Genus)) %>% 
+  mutate(name = paste0("a.", ASV)) %>% 
+  mutate(newname = paste0("a." , ASV, "[", paste(Genus, Species),"]") %>% 
+           gsub("  ", " ", .) %>% 
+           gsub("a\\. ", "a\\.", .) %>% 
+           gsub("\\[ ", "\\[", .)) %>% 
+  mutate(level = "ASV",
+         tax = ASV) %>% 
+  select(name, newname, level, tax, Genus.name)
+
+species <- tax_table(ps)@.Data %>%
+  data.frame() %>% 
+  select(Genus, Species) %>% 
+  unique() %>% 
+  mutate(Genus.name = Genus) %>% 
+  mutate(Genus = if_else(str_detect(Species, "(unc.)"),
+                         "",
+                         Genus)) %>% 
+  mutate(name = paste0("s.", Species)) %>% 
+  mutate(newname = paste0("s.", paste(Genus, Species)) %>% 
+           gsub("  ", " ", .) %>% 
+           gsub("s\\. ", "s\\.", .) %>% 
+           gsub("\\[ ", "\\[", .)) %>% 
+  mutate(level = "Species",
+         tax = Species) %>% 
+  select(name, newname, level, tax, Genus.name)
+
+tx <- bind_rows(asv, species) 
+```
+
+### Annotate
+```{r}
+meta <- meta %>% 
+  left_join(tx,c("tax", "name", "level")) %>%
+  mutate(name = if_else(str_sub(name ,1,2) == "a.",
+                        newname,
+                        name)) %>% 
+  mutate(name = if_else(str_sub(name ,1,2) == "s.",
+                        newname,
+                        name)) %>% 
+  select(-newname) %>% 
+  mutate(Genus.name = if_else(is.na(Genus.name),
+                              name, 
+                              paste0("g.", Genus.name)))
+
+```
+# Write annotated
+
+```{r}
+paste0(d.out, "/", "meta.tsv") %>% 
+ write_tsv(meta,.)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

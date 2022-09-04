@@ -90,6 +90,19 @@ mr <- read.delim("/home/lsilva/IKMB/projects/skin.mgwas/common.data/MR.results/M
   mutate(meta.id = exposure)
 
 ```
+# Remove species results after Nat Comm reviewer comment
+
+```{r}
+meta.indices <- meta.indices %>% filter(level != "Species")
+tests <- tests %>% filter(level != "Species") %>% 
+  #remove species from cluster member
+  mutate(cluster.member = cluster.member %>% 
+           str_remove("s\\..+;") %>% 
+           str_remove("s\\..+$"))
+```
+
+
+
 # Filter and format MR results
 
 ## Remove enventual duplicated results
@@ -210,7 +223,7 @@ Results are tracked as meta.id
 
 ```{r}
 mr <- mr %>% 
-  left_join(meta.indices %>% 
+  inner_join(meta.indices %>% 
               select(meta.id, microenv, level, tax),
             by = "meta.id")
 ```
@@ -218,7 +231,7 @@ mr <- mr %>%
 ## Add taxonomy clusters info
 ```{r}
 mr <- tests %>% select(level, tax, microenv, name, cluster.member) %>% unique() %>% 
-  right_join(mr, by = c("level", "tax", "microenv"))
+  inner_join(mr, by = c("level", "tax", "microenv"))
 ```
 
 ## Annotate ASV names to the table 

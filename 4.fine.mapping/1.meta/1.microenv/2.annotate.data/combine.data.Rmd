@@ -85,10 +85,8 @@ meta <- "~/IKMB/projects/skin.mgwas/results/3.meta.analysis/1.microenv/3.beta.ta
   readRDS()
 all.proteins <- "~/IKMB/projects/skin.mgwas/common.data/human.proteome/proteinatlas.tsv" %>% 
   read_tsv()
-
 skin.expression <- "~/IKMB/projects/skin.mgwas/common.data/human.proteome/rna_consensus.tsv" %>% 
   read_tsv()
-
 egenes <- "~/IKMB/projects/skin.mgwas/common.data/gtex.mapping/gtex.mapping.final_data_20210611.csv" %>% 
   read.delim(sep = ',') %>% 
   unique()
@@ -100,11 +98,66 @@ genes.files <- list.files(d.in, pattern = ".genes.tsv")
 
 # Load allele frequencies
 # Optimize with fread
-afq <- fread("~/IKMB/projects/skin.mgwas/results/1.data.harmonization/2.genotype/PopGen_and_KORA.harmonized.all.MAF.frqx") %>% 
+afq <- fread("~/IKMB/projects/skin.mgwas/results/1.data.harmonization/2.genotype/kora.popgen.maf/PopGen_and_KORA.harmonized.all.MAF.frqx") %>% 
   magrittr::set_colnames(make.names(colnames(.)))
 ```
+# Remove Species-level results
+Done after Nat Comm reviewer comments 
 
-# GTex 
+ - meta
+```{r}
+meta <- meta %>% 
+  #remove species results
+  filter(level != "Species") %>% 
+  #remove species from cluster member
+  mutate(cluster.member = cluster.member %>% 
+           str_remove("s\\..+;") %>% 
+           str_remove("s\\..+$"))
+paste0(d.out, "/", "meta.all.rds") %>% 
+  saveRDS(meta, .)
+```
+
+ - gene files
+```{r, warning=F}
+genes.files <- genes.files %>% 
+  data.frame(files = .) %>% 
+  separate(files, c("roundid", "meta.id", "type", "metanalysis"), remove = F) %>% 
+  mutate(meta.id = str_remove(meta.id, "meta") %>% 
+           as.integer(),
+         type = str_remove(type, "type"),
+         metanalysis = str_remove(metanalysis, "metanalysis")) %>% 
+  inner_join(meta %>% select(metanalysis, type, meta.id) %>% unique(), 
+             by = c("meta.id", "type", "metanalysis")) %>% 
+  pull(files)
+```
+
+ - snp files
+ 
+```{r, warning=F}
+snps.files <- snps.files %>% 
+  data.frame(files = .) %>% 
+  separate(files, c("roundid", "meta.id", "type", "metanalysis"), remove = F) %>% 
+  mutate(meta.id = str_remove(meta.id, "meta") %>% 
+           as.integer(),
+         type = str_remove(type, "type"),
+         metanalysis = str_remove(metanalysis, "metanalysis")) %>% 
+  inner_join(meta %>% select(metanalysis, type, meta.id) %>% unique(),
+             by = c("meta.id", "type", "metanalysis")) %>% 
+  pull(files)
+```
+
+# Get snps data
+
+```{r}
+snps <- NULL
+for (i in snps.files){
+  snp.in <- read.delim(paste0(d.in, i))
+  snps <- bind_rows(snps, snp.in)
+} # SNP data should be added here, to save it, also add more information for supplementary info
+
+```
+
+# Get GTex data
 
 ## Format GTex results
 
@@ -114,6 +167,25 @@ egenes <- egenes %>%
   #Get permanent ensemble IDs
   mutate(gene_id_hg_38_gene_2 = gsub("\\.[0-9]*$", "", gene_id_hg_38_gene_2))
 ```
+
+## March Gtex with snps
+
+```{r}
+egenes <- egenes %>% filter(refsnp_id %in% snps$refsnp_id)
+```
+
+## Save formatted egenes
+
+```{r}
+write.table(egenes, paste0(d.out,
+                           "/", 
+                           "formatted.egenes.tsv"),
+            quote = T, 
+            sep = "\t", 
+            row.names = F)
+
+```
+
 
 ### Annotate gene names
 
@@ -146,18 +218,6 @@ egenes <- egenes %>%
   group_by(refsnp_id) %>% 
   summarise(egene.id = paste(egene.id, collapse = ","),
             egene.name = paste(egene.name, collapse = ","))
-```
-
-## Save formatted egenes
-
-```{r}
-write.table(egenes, paste0(d.out,
-                           "/", 
-                           "formatted.egenes.tsv"),
-            quote = T, 
-            sep = "\t", 
-            row.names = F)
-
 ```
 
 # Calculate EAF
@@ -224,14 +284,9 @@ genes <- genes %>%
 
 ## Snps
 
-```{r}
-snps <- NULL
-for (i in snps.files){
-  snp.in <- read.delim(paste0(d.in, i))
-  snps <- bind_rows(snps, snp.in)
-} # SNP data should be added here, to save it, also add more information for supplementary info
+### Add snp Full cohort information
 
-# Add snp Full cohort information
+```{r}
 snps <- snps %>% 
   left_join(afq, by = c("position", "chr_name")) %>% 
   # some clean up
@@ -246,6 +301,7 @@ snps <- snps %>%
             synonym_name, 
             consequence_type_tv, 
             synonym_name))
+
 ```
 
 ### Get gene names of SNPS
@@ -283,7 +339,6 @@ snps <- snps %>%
   left_join(snp.gene, by = c("round.index", "snp.name")) %>% 
   select(-ensembl_gene_stable_id)
 ```
-
 
 ## Add GTex annotation
 ```{r}

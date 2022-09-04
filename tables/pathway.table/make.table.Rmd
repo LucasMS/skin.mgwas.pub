@@ -1,0 +1,129 @@
+---
+title: "Get Pathway table"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library(kableExtra)
+library(scales)
+```
+
+## Import data
+```{r}
+pathway <- "/home/lsilva/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/5.Pathway.enrichment/DE_pathway.tsv" %>% 
+  read_tsv
+```
+
+```{r}
+pathway <- 
+  pathway %>% 
+  arrange(Adjusted.P.value) %>% 
+  mutate(GWAS_genes = ifelse(is.na(GWAS_genes), 
+                             "-",
+                             GWAS_genes),
+         Adjusted.P.value = if_else(is.na(Adjusted.P.value),
+                                    "-",
+                                    Adjusted.P.value %>% 
+                                      scientific() %>%
+                                      gsub("e-", "x10^-",.) %>%
+                                      gsub("e+", "x10^",.) %>%
+                                      paste0(., "^")),
+         P.value = if_else(is.na(P.value),
+                           "-",
+                           P.value %>% 
+                             scientific() %>%
+                             gsub("e-", "x10^-",.) %>%
+                             gsub("e+", "x10^",.) %>%
+                             paste0(., "^"))) %>%
+  separate(Term, c("Biological Process", "GO"), sep = " \\(GO:") %>% 
+  mutate(GO =  str_remove(GO, "\\)")) %>% 
+  rename(`*P* value` = P.value,
+         `*q* value` = Adjusted.P.value,
+         `Odds ratio` = Odds.Ratio,
+         `Combined score` = Combined.Score,
+         `GWAS gene in set`= "GWAS_genes",
+         Regulation = Expression) %>% 
+  select(Regulation,
+         `Biological Process`,
+         GO,
+         Overlap,
+         `*P* value`,
+         `*q* value`,
+         `Odds ratio`,
+         `Combined score`,
+         `GWAS gene in set`,
+         Genes) 
+```
+
+# Output table
+```{r}
+pathway %>% 
+  kable(escape = F) %>% 
+  kable_styling()
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

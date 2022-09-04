@@ -78,7 +78,6 @@ library(scales)
 ```{r}
 de <- de %>% 
   arrange(padj) %>% 
-  filter(GWAS == "yes") %>% 
   mutate(description = ifelse(is.na(description), 
                               "-",
                               description),

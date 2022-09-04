@@ -72,7 +72,7 @@ library(scales)
 ```{r}
 snps <- "/home/lsilva/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/lead.snp.bacteria.all.tsv" %>% 
   read_tsv()
-plot_snps <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/5.plot.manhattan/plot.df.RDS")
+plot_snps <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/5.plot.all.ps/plot.df.RDS")
 ```
 
 ```{r}

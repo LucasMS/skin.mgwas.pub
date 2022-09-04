@@ -72,15 +72,29 @@ library(ggtext)
 
 ## Import data
 ```{r}
-mr <- read_tsv("/home/lsilva/IKMB/projects/skin.mgwas/results/9.MR/mr.annotated.filtered.tsv") 
+allres <- read.table("/home/lsilva/IKMB/projects/skin.mgwas/common.data/MR.results/MR_results_ukb_with_sensitivity_final.2022.06.07.tsv", head=T, stringsAsFactors = F, sep="\t")
+
+mr <- allres %>%
+  filter(qval < 0.05) 
 ```
+
+# Change se
+```{r}
+mr <- mr %>%
+  mutate(se = if_else(b.x < 0,
+                      -se.x,
+                      se.x)) %>%
+  arrange(tax)
+
+```
+
 
 # Edit text
 
 ```{r}
 mr <- mr %>% 
-   mutate(label = if_else(str_sub(name, 1, 1) %in% c("s", "g", "f"),
-                             str_replace(name, "\\.", "\\.\\*"),
+  mutate(label = if_else(str_sub(name, 1, 1) %in% c("s", "g", "f"),
+                         str_replace(name, "\\.", "\\.\\*"),
                          name),
          label = if_else(
            str_detect(label, "\\["),
@@ -90,7 +104,7 @@ mr <- mr %>%
                              str_replace(label, " \\(unc", "\\* \\(unc"),
                            str_detect(label, "\\]") ~ str_replace(label, "\\]", "\\*\\]"),
                            str_sub(label, 1, 1) %in% c ("a", "s", "g",  "f") ~ paste0(label, "*"),
-         TRUE ~ label))
+                           TRUE ~ label))
 ```
 
 
@@ -103,19 +117,23 @@ mr.plot <- mr %>%
   mutate(outcome = gsub("Allergy/hypersensitivity/anaphylaxis",
                         "Allergy/hypersens./anaphylaxis",
                         outcome)) %>% 
-  ggplot(aes(x = fct_reorder(label, Genus.name), y=b, color = outcome)) +
+  ggplot(aes(x = fct_reorder(label, trait), y=b.x, color = trait)) +
   geom_point(aes(shape = microenv), size = 2) +
   ggpubr::rotate_x_text() +
   coord_flip()+
-  geom_errorbar(aes(ymin=b-se, ymax=b+se), width=.1, alpha = 0.8) +
-  geom_hline(yintercept=0, 
-             color = "grey", size=0.5) +
+  geom_errorbar(aes(ymin=b.x-se.x, ymax=b.x+se.x), width=.1, alpha =
+                  0.8) +
+  geom_hline(yintercept=0,
+             color = "grey", size=0.5, lty=2) +
   scale_colour_colorblind() +
   labs(y = "Effect size",
-       x = "Exposure (Mic. feature)", 
+       x = "Exposure (Mic. feature)",
        color = "Outcome",
        shape = "Microenv.") +
   theme(axis.text.y = element_markdown())
+
+
+
 mr.plot
 ```
 

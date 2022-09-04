@@ -81,7 +81,7 @@ library(gdata)
 
 ## Import data
 ```{r}
-to_plot <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/5.plot.manhattan/plot.df.RDS")
+to_plot <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/5.plot.all.ps/plot.df.RDS")
 snp_stats_plot <- readRDS("/home/lsilva/IKMB/projects/skin.mgwas/results/4.fine.mapping/1.meta/1.microenv/2.annotate.data/combined/plot.stats.df.rds")
 # Summary of associations
 plot_loci_microenv_df <- snp_stats_plot$plot_loci_microenv

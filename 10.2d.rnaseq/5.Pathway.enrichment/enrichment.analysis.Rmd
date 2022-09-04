@@ -1,0 +1,243 @@
+---
+title: "Enrich pathways"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      toc_float: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.02
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+
+# Set ggplot2 them as black and with
+library("ggplot2")
+theme_set(theme_bw())
+# Set seed for reproducibility
+set.seed(13)
+
+# # Color blind friendly pallet
+# cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+#           "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+# 
+# scale_fill_discrete <- function(...) {
+#    scale_fill_manual(..., values = cbp1)
+# }
+# scale_colour_discrete <- function(...) {
+#   scale_colour_manual(..., values = cbp1)
+# }
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(tidyverse)
+library("enrichR")
+library(colorspace)
+```
+
+
+#Functions
+
+## Convert list to dfs
+```{r}
+annotation.to.df <- function(x, xdf){
+  xdf <- xdf[[x]] %>%
+    data.frame
+  # Handle empty annotation
+  if(nrow(xdf) == 0){
+    xdf[1,] <- NA}
+  #add db name
+  xdf <- xdf %>% 
+    mutate(db = x) 
+  return(xdf)
+}
+```
+
+## Convert
+```{r}
+enrichr.them.all <- function(x){
+  
+  # Connect to Enrichr web service
+  dbs <- listEnrichrDbs()
+  dbs <- dbs[order(dbs$libraryName),]
+  #View(dbs)
+  
+  # Select databases
+  dbs_go <- c("GO_Biological_Process_2021")
+  
+  #Perform enrichment analysis
+  ## Go
+  
+  df_go <- enrichr(genes = x, databases = dbs_go)
+  df_go <- map(names(df_go), ~ annotation.to.df(.x, df_go)) %>% 
+    bind_rows()
+  
+  
+  # Combine them in a single dataframe
+  
+  df_enrich <- df_go %>% 
+    #remove empty annotation
+    filter(!is.na(Term))
+}
+
+```
+## Import data
+```{r}
+res <- "/home/lsilva/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/3.overview/DE.results.rds" %>% 
+  readRDS()
+```
+
+Follow [EnrichR tutorial by I-Hsuan Lin](https://ycl6.github.io/GO-Enrichment-Analysis-Demo/3_clusterProfiler.html)
+
+
+# Perform enrichment analyses
+
+```{r}
+df_enrich_up <- enrichr.them.all(res %>% 
+                                   filter(significant == "yes", 
+                                          Expression == "Up") %>% 
+                                   pull(Gene_name)) %>% 
+  mutate(Expression = "Up")
+
+
+df_enrich_down <- enrichr.them.all(res %>% 
+                                     filter(significant == "yes", 
+                                            Expression == "Down") %>% 
+                                     pull(Gene_name)) %>% 
+  mutate(Expression = "Down")
+```
+
+# Combine and format
+```{r}
+GWAS <- res %>%
+  filter(GWAS == "yes", 
+         significant == "yes") %>%
+  pull(Gene_name) %>% 
+  paste0(collapse = "|")
+
+df_all  <- bind_rows(df_enrich_up,
+                     df_enrich_down) %>% 
+  separate(Overlap, 
+           c("detected_gene_in_path", 
+             "total_gene_in_path"),
+           sep = "/", remove = F) %>% 
+  mutate(detected_gene_in_path = as.numeric(detected_gene_in_path),
+         total_gene_in_path = as.numeric(total_gene_in_path)) %>% 
+  mutate(gene_ratio = detected_gene_in_path/total_gene_in_path) %>% 
+  mutate(GWAS = case_when(str_detect(Genes, GWAS) ~ "yes",
+                                TRUE ~ "no")) %>% 
+  #Keep only significant
+  filter(Adjusted.P.value < 0.05) %>% 
+  # remove unecessary columns
+  select(-c(Old.P.value, Old.Adjusted.P.value, db))
+
+
+df_all %>% 
+  filter(Adjusted.P.value < 0.05, 
+         GWAS == "yes") %>% 
+  pull(Genes) %>% 
+  paste0(collapse = ";") %>% 
+  str_split(";") %>% 
+  .[[1]] %>% 
+  data.frame(Gene = .) %>% 
+  filter(str_detect(Gene, GWAS)) %>% 
+  unique()
+```
+## Add Gwas genes column
+
+```{r}
+df_gwas <- df_all %>% 
+  filter(GWAS == "yes") %>% 
+  group_split(Term) %>% 
+  map(.,function(x) x %>% 
+        pull(Genes) %>% 
+        str_split(";") %>% 
+        .[[1]] %>% 
+        data.frame(Gene_name = .,
+                   Term = x$Term)) %>% 
+  bind_rows() %>% 
+  inner_join(res %>%
+               filter(GWAS == "yes") %>% 
+               select(Gene_name)) %>% 
+  group_by(Term) %>% 
+  summarise(GWAS_genes = paste(Gene_name, collapse = ";"))
+
+df_all <- df_all %>% 
+  left_join(df_gwas)
+```
+
+
+
+# Vizualize Biological process expresssed
+```{r}
+to_plot <- df_all %>% 
+  mutate(Expression = Expression %>% 
+           factor(levels = c("Up", "Down"))) %>% 
+  # Keep the top 10 of each
+  group_by(Expression) %>% 
+  arrange(Adjusted.P.value) %>% 
+  slice_head(n = 10) %>% 
+  mutate(Term = Term %>% 
+           str_replace("with bulged adenosine as nucleophile", "with..."))
+
+p <- to_plot %>%   
+  ggplot(aes(x = detected_gene_in_path, 
+             y = fct_reorder(Term, detected_gene_in_path))) +
+  geom_col(aes(fill = gene_ratio)) +
+  facet_wrap(~ Expression, nrow = 2, scales = "free_y") +
+  theme(legend.position = "bottom") +
+  labs(x = "Annotated genes (n)",
+       y = "Biological Process (GO)",
+       fill = "Genes in process (ratio)") +
+  scale_fill_continuous_sequential("Heat") 
+p
+
+```
+
+
+# Write outputs
+
+```{r}
+write_tsv(df_all, paste0(d.out, "/" ,"DE_pathway.tsv"))
+saveRDS(p, paste0(d.out, "/" ,"plot.rds"))
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+

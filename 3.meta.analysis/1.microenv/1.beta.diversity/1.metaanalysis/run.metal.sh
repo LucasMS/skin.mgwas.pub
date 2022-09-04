@@ -36,7 +36,7 @@ echo 'GENOMICCONTROL OFF' >> $newfile
 echo 'VERBOSE ON' >> $newfile
 echo 'PROCESS ../index'${f2}'.comb.betatests.txt' >> $newfile
 
-## Add overlap for 36. These are dry sites
+## Add overlap for 36
 if [ $VAR == 36 ]
 then
 echo 'OVERLAP ON' >> $newfile

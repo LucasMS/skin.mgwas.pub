@@ -85,7 +85,7 @@ library(DESeq2)
 ## Import data
 ```{r}
 metadata <- read.csv("~/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/0.prepare.data/rna.sample.sheet.csv")
-rna <- readRDS("~/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/1.nfrnaseq/star_salmon/salmon.merged.gene_counts.rds")
+rna <- readRDS("~/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/1.nfrnaseq/results/star_salmon/salmon.merged.gene_counts.rds")
 tests <- read_tsv("/home/lsilva/IKMB/projects/skin.mgwas/scripts/10.2d.rnaseq/2.deseq2/tests.tsv")
 ```
 
@@ -132,7 +132,7 @@ tests <- tests %>%
 ### Add to S4 object
 
 ```{r}
-metadata(rna)$formula <- ~ group
+metadata(rna)$formula <- ~ batch + group
 metadata(rna)$tests <- tests
 ```
 
@@ -192,7 +192,10 @@ for (index.i in metadata(rna)$tests$index){
   countdata <- round(assays(se)[["counts"]])
   coldata <- colData(se) %>% 
     data.frame() %>% 
-    mutate(group = factor(group, levels = to.test))
+    mutate(group = factor(group, levels = to.test)) %>% 
+  mutate(batch = case_when(Replicate %in% c(1,2) ~ "A",
+                           Replicate %in% c(3,4) ~ "B",
+                           Replicate %in% c(5,6) ~ "C"))
   
   # Make deseq object
   dds <- DESeqDataSetFromMatrix(countData = countdata,
@@ -200,15 +203,15 @@ for (index.i in metadata(rna)$tests$index){
                                 design = metadata(se)$formula)
   # Perform test
   dds <- DESeq(dds)
-  resultsNames(dds)[2]
-  res <- results(dds, name = resultsNames(dds)[2])
-  resLFC <- lfcShrink(dds, coef=resultsNames(dds)[2], type="apeglm")
+  resultsNames(dds)[4]
+  res <- results(dds, name = resultsNames(dds)[4])
+  resLFC <- lfcShrink(dds, coef=resultsNames(dds)[4], type="apeglm")
   resOrdered <- resLFC[order(resLFC$pvalue),]
   
   #  Explore
-  plotMA(resLFC, ylim=c(-2,2), main = resultsNames(dds)[2])
-  abline(h= 1, lty = 2, col = "grey")
-  abline(h= -1, lty = 2, col = "grey")
+  plotMA(resLFC, ylim=c(-2,2), main = resultsNames(dds)[4])
+  abline(h = 1, lty = 2, col = "grey")
+  abline(h = -1, lty = 2, col = "grey")
   
   ## Save results
   
@@ -217,7 +220,7 @@ for (index.i in metadata(rna)$tests$index){
     filter(abs(log2FoldChange) > 1, padj < 0.05) %>% 
     arrange(padj) %>% 
     bind_cols(params) %>% 
-    mutate(test = resultsNames(dds)[2]) %>% 
+    mutate(test = resultsNames(dds)[4]) %>% 
     rownames_to_column("Gene") %>% 
     left_join(genes, by = "Gene") %>% 
     select(Gene, Gene_name, everything())
@@ -226,14 +229,14 @@ for (index.i in metadata(rna)$tests$index){
     data.frame() %>% 
     arrange(padj) %>% 
     bind_cols(params) %>% 
-    mutate(test = resultsNames(dds)[2])  %>% 
+    mutate(test = resultsNames(dds)[4])  %>% 
     rownames_to_column("Gene") %>% 
     left_join(genes, by = "Gene") %>% 
     select(Gene, Gene_name, everything())
   
-  paste0(d.out, "/", index.i,".", resultsNames(dds)[2],".filtered.tsv" ) %>% 
+  paste0(d.out, "/", index.i,".", resultsNames(dds)[4],".filtered.tsv" ) %>% 
     write_tsv(selected, .)    
-  paste0(d.out, "/", index.i,".", resultsNames(dds)[2],".all.tsv" ) %>% 
+  paste0(d.out, "/", index.i,".", resultsNames(dds)[4],".all.tsv" ) %>% 
     write_tsv(all, .)  
 }
 ```

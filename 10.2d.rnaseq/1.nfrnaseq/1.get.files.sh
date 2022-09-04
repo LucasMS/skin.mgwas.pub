@@ -1,4 +1,5 @@
-DIROUT="/home/lsilva/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/1.nfrnaseq"
+DIROUT="/home/lsilva/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/1.nfrnaseq/results"
+#Fix path
 
 mkdir -p $DIROUT
 

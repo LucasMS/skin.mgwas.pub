@@ -1,0 +1,137 @@
+---
+title: "Overview of the results"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+Visualize the general trends of the data
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r, message=F}
+library(tidyverse)
+library(SummarizedExperiment)
+library(PCAtools)
+library(ggrepel)
+library(DESeq2)
+```
+
+## Import data
+```{r, message=F}
+d.in <- "~/IKMB/projects/skin.mgwas/results/10.2d.rnaseq/2.deseq2/"
+se <- paste0(d.in, "summarized.experiment.rds") %>% 
+  readRDS()
+```
+
+# Make PCA
+
+```{r}
+meta <- colData(se) %>% 
+  data.frame() %>% 
+  filter(group %in% c("Control_Control", 
+                      "Control_epidermidis")) %>% 
+  mutate(batch = case_when(Replicate %in% c(1,2) ~ "A",
+                           Replicate %in% c(3,4) ~ "B",
+                           Replicate %in% c(5,6) ~ "C"))
+
+countdata <- round(assays(se)[["counts"]]) %>% 
+  select(all_of(meta$names))
+
+dds <- DESeqDataSetFromMatrix(countData = countdata,
+                                colData = meta,
+                                design = ~ batch + group)
+#Estimate site and fit model
+dds <- DESeq(dds)
+vst <- assay(vst(dds, blind = T))
+
+
+p <- pca(vst, metadata = meta, removeVar = 0.1)
+
+screeplot(p, axisLabSize = 18, titleLabSize = 22)
+  
+p <- biplot(p,
+       showLoadings = F, 
+       lab = meta$replicate,
+       colby = "Colonization",
+       shape = "batch", 
+       pointSize = 4,
+       labSize = 6) +
+  theme_few(base_size = 14) +
+  scale_color_manual(values = cbp1[1:2]) +
+  theme(legend.position = "bottom") +
+  labs(shape = "Batch")
+p
+
+saveRDS(p, paste0(d.out, "/", "pca.plot.rds"))
+
+```
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```
