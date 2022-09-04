@@ -1,5 +1,7 @@
 # Scripts from "Host genetic factors related to innate immunity, environmental sensing and cellular functions influence human skin microbiota"
 
+[![DOI](https://zenodo.org/badge/410956709.svg)](https://zenodo.org/badge/latestdoi/410956709)
+
 This folder contains scripts used in the manuscript **Host genetic factors related to innate immunity, environmental sensing and cellular functions influence human skin microbiota**. It is build on individual data processing of PopGen and KORA FF4 cohorts, which are then combined and analyzed together. Processing of individual cohort data was performed as in previous [publication](https://onlinelibrary.wiley.com/doi/10.1111/bjd.20072), which can be found in its dedicated [githubpage](https://github.com/LucasMS/skin.association). 
 
 ## Reproduction
